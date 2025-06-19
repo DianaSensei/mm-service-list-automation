@@ -48,7 +48,7 @@ public class Main {
         driver.switchTo().newWindow(WindowType.TAB);
 
         System.out.println("Start loading web");
-        driver.get("https://ga218935b806a36-dbn04er.adb.ap-singapore-1.oraclecloudapps.com/ords/r/momo_apex/service-list/d-service-list1?session=600701102466995");
+        driver.get("");
         System.out.println("Load web complete");
 
         for (var service : services) {
