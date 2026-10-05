@@ -1,10 +1,12 @@
 import type { BatchEvent } from './api';
 
-export type RowStatus = 'pending' | 'running' | 'done' | 'error';
+export type RowStatus = 'pending' | 'running' | 'done' | 'filled' | 'error';
 
 export interface BatchState {
   runId: string | null;
   running: boolean;
+  /** The run fills the form but does not submit. */
+  dryRun: boolean;
   statuses: RowStatus[];
   errors: Record<number, string>;
   /** Set when the sidecar stopped the batch on purpose (dialog stuck open). */
@@ -15,6 +17,7 @@ export interface BatchState {
 export const initialBatchState = (total = 0): BatchState => ({
   runId: null,
   running: false,
+  dryRun: false,
   statuses: Array<RowStatus>(total).fill('pending'),
   errors: {},
   abortReason: null,
@@ -27,11 +30,13 @@ const setAt = (arr: RowStatus[], i: number, v: RowStatus): RowStatus[] =>
 export function reduceBatch(state: BatchState, e: BatchEvent): BatchState {
   switch (e.type) {
     case 'started':
-      return { ...initialBatchState(e.total), runId: e.runId, running: true };
+      return { ...initialBatchState(e.total), runId: e.runId, running: true, dryRun: e.dryRun };
     case 'row-start':
       return { ...state, statuses: setAt(state.statuses, e.index, 'running') };
     case 'row-done':
       return { ...state, statuses: setAt(state.statuses, e.index, 'done') };
+    case 'row-filled':
+      return { ...state, statuses: setAt(state.statuses, e.index, 'filled') };
     case 'row-error':
       return {
         ...state,

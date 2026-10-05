@@ -1,303 +1,388 @@
-// The form-filling step, ported from the original Selenium `Main.java`. Each
-// row is one `Runtime.evaluate` of a self-contained async script that runs in
-// the page: click "create", wait for the dialog iframe, fill it, submit, wait
-// for the iframe to go away.
+// The form-filling step, ported from the original Selenium `Main.java` and
+// driven step by step from Rust so trusted (browser-level) input can be
+// interleaved with page scripts.
 //
-// Differences from the Selenium version, both deliberate:
-//   - dependent selects (L1 → L2 → … cascades) are *waited for* instead of
-//     assumed to be populated by the time the next `Select` is built;
-//   - the element ids are settings with the original values as defaults, since
-//     they are APEX-generated and the likeliest thing to change.
+// Per row: click "create" → wait for the dialog iframe → type into the text
+// fields → pick the selects → tick the checkbox → click submit → wait for the
+// dialog to close. Every step waits (polling) for its element instead of
+// assuming it is there; in `trusted` input mode a click additionally waits
+// until the element is actually hittable, like Selenium's native click.
+//
+// Differences from the Selenium version, all deliberate:
+//   - dependent selects (L1 → L2 → … cascades) are *waited for*, not assumed
+//     populated by the time the next one is touched;
+//   - ids, constants, timeouts and matching rules are settings (`config.rs`),
+//     since the ids are APEX-generated and the likeliest thing to change;
+//   - a dry run fills everything but never submits.
 
-use serde::Deserialize;
-use serde_json::{json, Value};
+use std::time::{Duration, Instant};
+
+use serde_json::Value;
 
 use crate::cdp::Cdp;
+use crate::config::{InputMode, OptionMatch, RunSettings};
 use crate::rows::ServiceRow;
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct ElementIds {
-    pub create: String,
-    pub service_code: String,
-    pub service_description: String,
-    pub merchant: String,
-    pub l1: String,
-    pub l2: String,
-    pub l3: String,
-    pub l4: String,
-    pub l5: String,
-    pub l6: String,
-    pub group_code_l1: String,
-    pub vertical: String,
-    pub project: String,
-    pub check: String,
-    pub submit: String,
+/// Page-side helpers shared by every snippet.
+const HELPERS: &str = r#"
+const visible = (el) => {
+  if (!el) return false;
+  const s = getComputedStyle(el);
+  return s.display !== 'none' && s.visibility !== 'hidden' && el.getClientRects().length > 0;
+};
+const frameEl = () => document.querySelector('iframe');
+const frameDoc = () => { try { const f = frameEl(); return f && f.contentDocument; } catch (e) { return null; } };
+const norm = (s) => s.replace(/\s+/g, ' ').trim();
+"#;
+
+fn expr(body: &str) -> String {
+    format!("(() => {{ {HELPERS} {body} }})()")
 }
 
-impl Default for ElementIds {
-    fn default() -> Self {
-        Self {
-            create: "B71233594014006408".into(),
-            service_code: "P7_SERVICE_CODE_input".into(),
-            service_description: "P7_SERVICE_DESCRIPTION_input".into(),
-            merchant: "P7_MERCHANT_input".into(),
-            l1: "P7_BU_GROUP_CODE_L1_ID".into(),
-            l2: "P7_BU_GROUP_CODE_L2_ID".into(),
-            l3: "P7_BU_GROUP_CODE_L3_ID".into(),
-            l4: "P7_BU_GROUP_CODE_L4_ID".into(),
-            l5: "P7_BU_GROUP_CODE_L5_ID".into(),
-            l6: "P7_BU_GROUP_CODE_L6_ID".into(),
-            group_code_l1: "P7_GROUP_CODE_L1_ID".into(),
-            vertical: "P7_NEWVERTICAL_ID".into(),
-            project: "P7_SPECIALPROJECT_ID".into(),
-            check: "P7_CHECK".into(),
-            submit: "B71221230860006389".into(),
+fn js(s: &str) -> String {
+    serde_json::to_string(s).expect("string serialises")
+}
+
+/// Which document an element lives in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Doc {
+    Top,
+    Frame,
+}
+
+/// JS expression yielding the element (or null).
+fn el_expr(doc: Doc, id: &str) -> String {
+    match doc {
+        Doc::Top => format!("document.getElementById({})", js(id)),
+        Doc::Frame => format!("(frameDoc() && frameDoc().getElementById({}))", js(id)),
+    }
+}
+
+fn is_truthy(v: &Value) -> bool {
+    match v {
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
+        Value::String(s) => !s.is_empty(),
+        _ => true,
+    }
+}
+
+/// Poll `body` (a JS function body returning a value) until it is truthy.
+async fn wait_until(
+    cdp: &mut Cdp,
+    body: &str,
+    what: &str,
+    timeout_ms: u64,
+) -> Result<Value, String> {
+    let script = expr(body);
+    let start = Instant::now();
+    loop {
+        let v = cdp.eval(&script).await?;
+        if is_truthy(&v) {
+            return Ok(v);
+        }
+        if start.elapsed() >= Duration::from_millis(timeout_ms) {
+            return Err(format!("timed out waiting for {what}"));
+        }
+        tokio::time::sleep(Duration::from_millis(120)).await;
+    }
+}
+
+/// Viewport coordinates of the element's centre, only once it is visible and
+/// nothing covers that point (so a click would really land on it).
+fn point_body(doc: Doc, id: &str) -> String {
+    let el = el_expr(doc, id);
+    let hit = match doc {
+        Doc::Top => "document.elementFromPoint(x, y)".to_string(),
+        Doc::Frame => "frameDoc().elementFromPoint(lx, ly)".to_string(),
+    };
+    let shift = match doc {
+        Doc::Top => "",
+        Doc::Frame => {
+            "const f = frameEl(), fr = f.getBoundingClientRect(); const lx = x, ly = y; x += fr.left + f.clientLeft; y += fr.top + f.clientTop;"
+        }
+    };
+    format!(
+        "const el = {el}; if (!el || !visible(el)) return null; \
+         el.scrollIntoView({{ block: 'center', inline: 'center' }}); \
+         const r = el.getBoundingClientRect(); if (r.width === 0 || r.height === 0) return null; \
+         let x = r.left + r.width / 2, y = r.top + r.height / 2; {shift} \
+         const hit = {hit}; if (!hit || !(hit === el || el.contains(hit))) return null; \
+         return {{ x, y }};"
+    )
+}
+
+async fn click(cdp: &mut Cdp, doc: Doc, id: &str, s: &RunSettings) -> Result<(), String> {
+    let t = s.behavior.timeout_ms;
+    match s.behavior.input_mode {
+        InputMode::Trusted => {
+            let p = wait_until(
+                cdp,
+                &point_body(doc, id),
+                &format!("#{id} to be clickable"),
+                t,
+            )
+            .await?;
+            let (x, y) = (
+                p["x"].as_f64().unwrap_or(0.0),
+                p["y"].as_f64().unwrap_or(0.0),
+            );
+            cdp.mouse_click(x, y).await
+        }
+        InputMode::Script => {
+            let body = format!(
+                "const el = {}; if (!visible(el)) return false; el.click(); return true;",
+                el_expr(doc, id)
+            );
+            wait_until(cdp, &body, &format!("#{id} to be visible"), t)
+                .await
+                .map(|_| ())
         }
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct FormSettings {
-    pub ids: ElementIds,
-    /// Constant selections the original hardcoded.
-    pub l1: String,
-    pub l5: String,
-    pub group_code_l1: String,
-    pub project: String,
-    /// Per-step wait (ms) for elements/options to appear.
-    pub timeout_ms: u64,
-    /// How long to wait for the dialog to close after submit.
-    pub close_timeout_ms: u64,
+async fn type_text(cdp: &mut Cdp, id: &str, value: &str, s: &RunSettings) -> Result<(), String> {
+    let t = s.behavior.timeout_ms;
+    let el = el_expr(Doc::Frame, id);
+    // Focus and select the current content so typing replaces it (Selenium's
+    // clear() + sendKeys()).
+    let focus = format!("const el = {el}; if (!el) return false; el.focus(); if (el.select) el.select(); return true;");
+    wait_until(cdp, &focus, &format!("#{id}"), t).await?;
+
+    if s.behavior.input_mode == InputMode::Trusted && !value.is_empty() {
+        // Real typing: the browser fires `input`, and `change` when focus leaves.
+        cdp.insert_text(value).await?;
+        return cdp
+            .eval(&expr(&format!("const el = {el}; el.blur(); return true;")))
+            .await
+            .map(|_| ());
+    }
+    // Script mode, or clearing a field: a programmatic value change raises no
+    // native `change`, so raise `input` and `change` by hand.
+    let set = format!(
+        "const el = {el}; el.value = {}; const W = el.ownerDocument.defaultView; \
+         el.dispatchEvent(new W.Event('input', {{ bubbles: true }})); \
+         el.dispatchEvent(new W.Event('change', {{ bubbles: true }})); el.blur(); return true;",
+        js(value)
+    );
+    cdp.eval(&expr(&set)).await.map(|_| ())
 }
 
-impl Default for FormSettings {
-    fn default() -> Self {
-        Self {
-            ids: ElementIds::default(),
-            l1: "SME OFFLINE".into(),
-            l5: "OTHER".into(),
-            group_code_l1: "PAYMENT".into(),
-            project: "SME OFFLINE".into(),
-            timeout_ms: 10_000,
-            close_timeout_ms: 10_000,
+/// JS function body returning the index of the matching option, or -1.
+fn find_option_body(id: &str, text: &str, mode: OptionMatch) -> String {
+    let test = match mode {
+        OptionMatch::Exact => "norm(o.text) === want",
+        OptionMatch::IgnoreCase => "norm(o.text).toLowerCase() === want.toLowerCase()",
+        OptionMatch::Contains => "norm(o.text).toLowerCase().includes(want.toLowerCase())",
+    };
+    format!(
+        "const sel = {}; if (!sel) return null; const want = norm({}); \
+         const i = [...sel.options].findIndex((o) => {test}); return i;",
+        el_expr(Doc::Frame, id),
+        js(text)
+    )
+}
+
+async fn select_option(cdp: &mut Cdp, id: &str, text: &str, s: &RunSettings) -> Result<(), String> {
+    let t = s.behavior.timeout_ms;
+    let find = find_option_body(id, text, s.behavior.option_match);
+    // `-1` is falsy-by-meaning but truthy-by-JSON, so wait on `>= 0` explicitly.
+    let guarded =
+        format!("const i = (() => {{ {find} }})(); return i !== null && i >= 0 ? i + 1 : 0;");
+    if let Err(e) = wait_until(cdp, &guarded, &format!("option \"{text}\" in #{id}"), t).await {
+        // Say what *was* there: usually the fastest way to spot a CSV/page mismatch.
+        let list = format!(
+            "const sel = {}; return sel ? [...sel.options].map((o) => norm(o.text)).filter(Boolean).slice(0, 8) : null;",
+            el_expr(Doc::Frame, id)
+        );
+        if cdp.is_closed() {
+            return Err(e); // the connection died; "options seen" would only mislead
         }
+        let seen = cdp.eval(&expr(&list)).await.ok().filter(|v| !v.is_null());
+        return Err(match seen {
+            Some(v) => format!("{e} (options seen: {v})"),
+            None => format!("{e} (select not found)"),
+        });
+    }
+    let apply = format!(
+        "const i = (() => {{ {find} }})(); const sel = {}; sel.selectedIndex = i; \
+         const W = sel.ownerDocument.defaultView; sel.dispatchEvent(new W.Event('change', {{ bubbles: true }})); return true;",
+        el_expr(Doc::Frame, id)
+    );
+    cdp.eval(&expr(&apply)).await.map(|_| ())
+}
+
+async fn dialog_closed(cdp: &mut Cdp) -> bool {
+    matches!(
+        cdp.eval(&expr(
+            "return [...document.querySelectorAll('iframe')].every((f) => !visible(f));"
+        ))
+        .await,
+        Ok(Value::Bool(true))
+    )
+}
+
+/// Poll until no dialog iframe is visible. After a failed row this decides
+/// whether the next row may run: filling a second row into a dialog that is
+/// still open from the first would silently write wrong data.
+pub async fn wait_dialog_closed(cdp: &mut Cdp, timeout_ms: u64) -> bool {
+    let start = Instant::now();
+    loop {
+        if dialog_closed(cdp).await {
+            return true;
+        }
+        if start.elapsed() >= Duration::from_millis(timeout_ms) {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
 
-/// `GROCERY` has its own vertical; every other L3 is its own vertical.
-fn vertical_for(l3: &str) -> String {
-    if l3.eq_ignore_ascii_case("GROCERY") {
-        "GROCERY - OTHER".to_string()
-    } else {
-        l3.to_string()
-    }
+/// Wait at start for the page to finish loading and show the create button.
+/// Fails with a message that names both causes: not loaded yet, or not signed in.
+pub async fn wait_ready(cdp: &mut Cdp, s: &RunSettings) -> Result<(), String> {
+    let body = format!(
+        "return document.readyState === 'complete' && visible({});",
+        el_expr(Doc::Top, &s.form.ids.create)
+    );
+    wait_until(cdp, &body, "the page to load", s.behavior.ready_timeout_ms)
+        .await
+        .map(|_| ())
+        .map_err(|_| "the create button never appeared — the page may still be loading, or you are not signed in".to_string())
 }
 
-/// Everything the in-page script needs, as data. Select order matches the
-/// original's call order, which matters for the cascading dropdowns.
-fn payload(row: &ServiceRow, s: &FormSettings) -> Value {
-    let i = &s.ids;
-    json!({
-        "timeoutMs": s.timeout_ms,
-        "closeTimeoutMs": s.close_timeout_ms,
-        "create": i.create,
-        "marker": i.service_code,
-        "check": i.check,
-        "submit": i.submit,
-        "texts": [
-            [i.service_code, row.service_code],
-            [i.service_description, row.service_description],
-            [i.merchant, row.merchant_name],
-        ],
-        "selects": [
-            [i.l1, s.l1],
-            [i.l2, row.l2],
-            [i.l3, row.l3],
-            [i.l4, row.l4],
-            [i.l5, s.l5],
-            [i.l6, row.l6],
-            [i.group_code_l1, s.group_code_l1],
-            [i.vertical, vertical_for(&row.l3)],
-            [i.project, s.project],
-        ],
-    })
-}
-
-const SCRIPT: &str = r#"(async (p) => {
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const waitFor = async (fn, what, ms = p.timeoutMs) => {
-    const t = Date.now();
-    for (;;) {
-      const v = fn();
-      if (v) return v;
-      if (Date.now() - t > ms) throw new Error('timed out waiting for ' + what);
-      await sleep(100);
-    }
-  };
-  const visible = (el) => !!el && el.getClientRects().length > 0;
-  const norm = (s) => s.replace(/\s+/g, ' ').trim();
-
-  const create = await waitFor(() => { const e = document.getElementById(p.create); return visible(e) && e; }, 'create button');
-  create.click();
-
-  const frame = await waitFor(() => {
-    const f = document.querySelector('iframe');
-    return f && f.contentDocument && f.contentDocument.getElementById(p.marker) && f;
-  }, 'form dialog');
-  const d = frame.contentDocument;
-  const w = frame.contentWindow;
-  const $ = (id) => d.getElementById(id);
-  const fire = (el, type) => el.dispatchEvent(new w.Event(type, { bubbles: true }));
-
-  const setText = async (id, value) => {
-    const el = await waitFor(() => $(id), '#' + id);
-    el.focus();
-    el.value = '';
-    el.value = value;
-    fire(el, 'input');
-    fire(el, 'change');
-  };
-  const selectText = async (id, text) => {
-    const sel = await waitFor(() => $(id), '#' + id);
-    const find = () => [...sel.options].findIndex((o) => norm(o.text) === norm(text));
-    await waitFor(() => find() >= 0, 'option "' + text + '" in #' + id);
-    sel.selectedIndex = find();
-    fire(sel, 'change');
-  };
-
-  for (const [id, v] of p.texts) await setText(id, v);
-  for (const [id, v] of p.selects) await selectText(id, v);
-
-  const cb = await waitFor(() => $(p.check), '#' + p.check);
-  if (!cb.checked) cb.click();
-  (await waitFor(() => $(p.submit), '#' + p.submit)).click();
-
-  const closed = await waitFor(
-    () => [...document.querySelectorAll('iframe')].every((f) => !visible(f)),
-    'dialog to close',
-    p.closeTimeoutMs,
-  ).then(() => true, () => false);
-  return { closed };
-})"#;
-
-pub fn build_script(row: &ServiceRow, s: &FormSettings) -> String {
-    format!("{SCRIPT}({})", payload(row, s))
-}
-
-/// Is the session on the page where the create button exists (i.e. logged in)?
-pub async fn is_ready(cdp: &mut Cdp, s: &FormSettings) -> Result<bool, String> {
-    let id = serde_json::to_string(&s.ids.create).map_err(|e| e.to_string())?;
+/// One-shot readiness probe for the status indicator (no waiting).
+pub async fn is_ready(cdp: &mut Cdp, s: &RunSettings) -> Result<bool, String> {
     let v = cdp
-        .eval(&format!("!!document.getElementById({id})"))
+        .eval(&expr(&format!(
+            "return !!{};",
+            el_expr(Doc::Top, &s.form.ids.create)
+        )))
         .await?;
     Ok(v.as_bool().unwrap_or(false))
 }
 
-/// Poll until no dialog iframe is visible. After a failed row this is what
-/// decides whether the next row may run: filling a second row into a dialog
-/// that is still open from the first would silently write wrong data.
-pub async fn wait_dialog_closed(cdp: &mut Cdp, timeout_ms: u64) -> bool {
-    const CHECK: &str =
-        "[...document.querySelectorAll('iframe')].every((f) => f.getClientRects().length === 0)";
-    let mut waited = 0;
-    loop {
-        if matches!(cdp.eval(CHECK).await, Ok(Value::Bool(true))) {
-            return true;
-        }
-        if waited >= timeout_ms {
-            return false;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        waited += 200;
+#[derive(Debug, PartialEq, Eq)]
+pub enum RowOutcome {
+    Submitted,
+    /// Dry run: everything was filled, nothing submitted.
+    Filled,
+}
+
+async fn fill_and_submit(
+    cdp: &mut Cdp,
+    row: &ServiceRow,
+    s: &RunSettings,
+) -> Result<RowOutcome, String> {
+    let (i, c) = (&s.form.ids, &s.form.constants);
+    let t = s.behavior.timeout_ms;
+
+    click(cdp, Doc::Top, &i.create, s).await?;
+    let marker = format!("return !!{};", el_expr(Doc::Frame, &i.service_code));
+    wait_until(cdp, &marker, "the form dialog", t).await?;
+
+    type_text(cdp, &i.service_code, &row.service_code, s).await?;
+    type_text(cdp, &i.service_description, &row.service_description, s).await?;
+    type_text(cdp, &i.merchant, &row.merchant_name, s).await?;
+
+    // Same call order as the original — it matters for the cascading selects.
+    let vertical = s.form.vertical_for(&row.l3);
+    let selects: [(&str, &str); 9] = [
+        (&i.l1, &c.l1),
+        (&i.l2, &row.l2),
+        (&i.l3, &row.l3),
+        (&i.l4, &row.l4),
+        (&i.l5, &c.l5),
+        (&i.l6, &row.l6),
+        (&i.group_code_l1, &c.group_code_l1),
+        (&i.vertical, &vertical),
+        (&i.project, &c.project),
+    ];
+    for (id, text) in selects {
+        select_option(cdp, id, text, s).await?;
+    }
+
+    // 1 = present and unticked, 2 = present and ticked (0 = not there yet).
+    let state_body = format!(
+        "const el = {}; return el ? (el.checked ? 2 : 1) : 0;",
+        el_expr(Doc::Frame, &i.check)
+    );
+    let state = wait_until(cdp, &state_body, &format!("#{}", i.check), t).await?;
+    if state.as_i64() == Some(1) {
+        click(cdp, Doc::Frame, &i.check, s).await?;
+    }
+
+    if s.behavior.dry_run {
+        tokio::time::sleep(Duration::from_millis(s.behavior.dry_run_hold_ms)).await;
+        cdp.press_escape().await?;
+        return if wait_dialog_closed(cdp, s.behavior.close_timeout_ms).await {
+            Ok(RowOutcome::Filled)
+        } else {
+            Err("dry run: the dialog did not close on Escape".to_string())
+        };
+    }
+
+    click(cdp, Doc::Frame, &i.submit, s).await?;
+    if wait_dialog_closed(cdp, s.behavior.close_timeout_ms).await {
+        Ok(RowOutcome::Submitted)
+    } else {
+        Err("dialog did not close after submit (the form may have rejected the row)".to_string())
     }
 }
 
-/// Fill and submit one row. On any failure the dialog may be left open, so
-/// Escape is pressed to leave the page usable for the next row.
-pub async fn run_row(cdp: &mut Cdp, row: &ServiceRow, s: &FormSettings) -> Result<(), String> {
-    let outcome = cdp.eval(&build_script(row, s)).await;
-    let result = match outcome {
-        Ok(v) if v.get("closed").and_then(Value::as_bool) == Some(true) => return Ok(()),
-        Ok(_) => Err(
-            "dialog did not close after submit (the form may have rejected the row)".to_string(),
-        ),
-        Err(e) => Err(e),
-    };
-    let _ = cdp.press_escape().await;
+/// Fill (and, unless dry-running, submit) one row. On any failure the dialog may
+/// be left open, so Escape is pressed to leave the page usable for the next row.
+pub async fn run_row(
+    cdp: &mut Cdp,
+    row: &ServiceRow,
+    s: &RunSettings,
+) -> Result<RowOutcome, String> {
+    let result = fill_and_submit(cdp, row, s).await;
+    if result.is_err() {
+        let _ = cdp.press_escape().await;
+    }
     result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::OptionMatch;
 
-    fn row(l3: &str) -> ServiceRow {
-        ServiceRow {
-            mid: "M".into(),
-            service_code: "SC".into(),
-            service_description: "D".into(),
-            merchant_name: "N".into(),
-            l2: "L2".into(),
-            l3: l3.into(),
-            l4: "L4".into(),
-            l6: "L6".into(),
+    #[test]
+    fn ids_and_text_are_embedded_as_json_not_spliced_into_code() {
+        let e = el_expr(Doc::Frame, "a\"b'c\\");
+        assert!(e.contains(r#""a\"b'c\\""#), "{e}");
+        let body = find_option_body("sel", "O'Brien \"Cafe\"\\", OptionMatch::Exact);
+        assert!(body.contains(r#""O'Brien \"Cafe\"\\""#), "{body}");
+    }
+
+    #[test]
+    fn option_matching_modes_pick_different_predicates() {
+        assert!(find_option_body("s", "x", OptionMatch::Exact).contains("=== want"));
+        assert!(find_option_body("s", "x", OptionMatch::IgnoreCase)
+            .contains("toLowerCase() === want.toLowerCase()"));
+        assert!(find_option_body("s", "x", OptionMatch::Contains).contains("includes("));
+    }
+
+    #[test]
+    fn truthiness_matches_what_the_waiters_expect() {
+        use serde_json::json;
+        for falsy in [json!(null), json!(false), json!(0), json!("")] {
+            assert!(!is_truthy(&falsy), "{falsy}");
+        }
+        for truthy in [json!(true), json!(1), json!("x"), json!({"x": 1})] {
+            assert!(is_truthy(&truthy), "{truthy}");
         }
     }
 
     #[test]
-    fn grocery_maps_to_its_own_vertical_others_pass_through() {
-        assert_eq!(vertical_for("grocery"), "GROCERY - OTHER");
-        assert_eq!(vertical_for("FASHION"), "FASHION");
-    }
-
-    #[test]
-    fn selects_keep_the_original_order() {
-        let p = payload(&row("FASHION"), &FormSettings::default());
-        let ids: Vec<&str> = p["selects"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|s| s[0].as_str().unwrap())
-            .collect();
-        assert_eq!(
-            ids,
-            [
-                "P7_BU_GROUP_CODE_L1_ID",
-                "P7_BU_GROUP_CODE_L2_ID",
-                "P7_BU_GROUP_CODE_L3_ID",
-                "P7_BU_GROUP_CODE_L4_ID",
-                "P7_BU_GROUP_CODE_L5_ID",
-                "P7_BU_GROUP_CODE_L6_ID",
-                "P7_GROUP_CODE_L1_ID",
-                "P7_NEWVERTICAL_ID",
-                "P7_SPECIALPROJECT_ID",
-            ]
-        );
-        assert_eq!(p["selects"][7][1], "FASHION");
-        assert_eq!(p["selects"][0][1], "SME OFFLINE");
-    }
-
-    #[test]
-    fn row_values_are_embedded_as_json_not_spliced_into_code() {
-        let mut r = row("X");
-        r.merchant_name = "O'Brien \"Cafe\"\\".into();
-        let script = build_script(&r, &FormSettings::default());
-        assert!(
-            script.ends_with("})"),
-            "script must end with the call's closing paren"
-        );
-        assert!(script.contains(r#""O'Brien \"Cafe\"\\""#));
-    }
-
-    #[test]
-    fn settings_deserialize_with_partial_overrides() {
-        let s: FormSettings =
-            serde_json::from_value(json!({ "l1": "X", "ids": { "submit": "S" } })).unwrap();
-        assert_eq!(s.l1, "X");
-        assert_eq!(s.ids.submit, "S");
-        assert_eq!(s.ids.create, "B71233594014006408");
-        assert_eq!(s.timeout_ms, 10_000);
+    fn click_point_in_a_frame_is_translated_to_viewport_coordinates() {
+        let top = point_body(Doc::Top, "b");
+        let frame = point_body(Doc::Frame, "b");
+        assert!(!top.contains("frameEl()"));
+        assert!(frame.contains("fr.left + f.clientLeft"));
+        assert!(frame.contains("frameDoc().elementFromPoint(lx, ly)"));
     }
 }

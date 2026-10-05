@@ -7,7 +7,7 @@ const run = (events: BatchEvent[]) => events.reduce(reduceBatch, initialBatchSta
 describe('reduceBatch', () => {
   it('tracks per-row status and the final summary', () => {
     const s = run([
-      { type: 'started', runId: 'run-1', total: 3 },
+      { type: 'started', runId: 'run-1', total: 3, dryRun: false },
       { type: 'row-start', index: 0, serviceCode: 'A' },
       { type: 'row-done', index: 0 },
       { type: 'row-start', index: 1, serviceCode: 'B' },
@@ -21,14 +21,14 @@ describe('reduceBatch', () => {
   });
 
   it('is running between started and finished, and keeps the runId for cancel', () => {
-    const s = run([{ type: 'started', runId: 'run-7', total: 2 }]);
+    const s = run([{ type: 'started', runId: 'run-7', total: 2, dryRun: false }]);
     expect(s.running).toBe(true);
     expect(s.runId).toBe('run-7');
   });
 
   it('records why a batch was aborted', () => {
     const s = run([
-      { type: 'started', runId: 'r', total: 2 },
+      { type: 'started', runId: 'r', total: 2, dryRun: false },
       { type: 'row-error', index: 0, error: 'x' },
       { type: 'aborted', index: 0, error: 'dialog still open' },
       { type: 'finished', ok: 0, failed: 1, cancelled: false, aborted: true },
@@ -39,9 +39,18 @@ describe('reduceBatch', () => {
 
   it('ignores an index outside the row list instead of growing the array', () => {
     const s = run([
-      { type: 'started', runId: 'r', total: 1 },
+      { type: 'started', runId: 'r', total: 1, dryRun: false },
       { type: 'row-done', index: 5 },
     ]);
     expect(s.statuses).toEqual(['pending']);
+  });
+
+  it('marks dry-run rows as filled, not done', () => {
+    const s = run([
+      { type: 'started', runId: 'r', total: 2, dryRun: true },
+      { type: 'row-filled', index: 0 },
+    ]);
+    expect(s.dryRun).toBe(true);
+    expect(s.statuses).toEqual(['filled', 'pending']);
   });
 });

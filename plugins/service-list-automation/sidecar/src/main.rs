@@ -20,6 +20,7 @@
 
 mod cdp;
 mod chrome;
+mod config;
 mod form;
 mod rows;
 
@@ -35,7 +36,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 use crate::cdp::Cdp;
-use crate::form::FormSettings;
+use crate::config::{columns_from, settings_from};
+use crate::form::RowOutcome;
 use crate::rows::ServiceRow;
 
 const SERVICE_PROTOCOL: u32 = 1;
@@ -147,14 +149,14 @@ fn parse<T: for<'de> Deserialize<'de>>(params: Value) -> Result<T, String> {
 struct SessionParams {
     port: u16,
     url_contains: String,
-    settings: FormSettings,
+    settings: Value,
 }
 impl Default for SessionParams {
     fn default() -> Self {
         Self {
             port: DEFAULT_PORT,
             url_contains: String::new(),
-            settings: FormSettings::default(),
+            settings: Value::Null,
         }
     }
 }
@@ -178,6 +180,8 @@ struct CsvParams {
     text: String,
     #[serde(default)]
     skip_header: bool,
+    #[serde(default)]
+    columns: Value,
 }
 
 #[derive(Deserialize)]
@@ -205,10 +209,33 @@ fn default_profile_dir() -> PathBuf {
     base.join("chrome-profile")
 }
 
+/// Chrome is already running with our debug port. Bring a window forward, or —
+/// when the user closed the last window (Chrome stays alive on macOS) — open a
+/// new one, so "Open Chrome" always ends with something to look at.
+async fn show_existing_chrome(port: u16, url: Option<&str>) -> Result<Value, String> {
+    let ws = chrome::browser_ws_url(port).await?;
+    let mut browser = Cdp::connect(&ws).await?;
+    let pages = chrome::list_pages(port).await?;
+    if let Some(page) = pages.first() {
+        browser
+            .call("Target.activateTarget", json!({ "targetId": page.id }))
+            .await?;
+        return Ok(json!({ "reused": true, "port": port, "openedWindow": false }));
+    }
+    let url = url.filter(|u| !u.is_empty()).unwrap_or("about:blank");
+    browser
+        .call(
+            "Target.createTarget",
+            json!({ "url": url, "newWindow": true }),
+        )
+        .await?;
+    Ok(json!({ "reused": true, "port": port, "openedWindow": true }))
+}
+
 async fn launch_chrome(params: Value) -> Result<Value, String> {
     let p: LaunchParams = parse(params)?;
     if chrome::is_reachable(p.port).await {
-        return Ok(json!({ "reused": true, "port": p.port }));
+        return show_existing_chrome(p.port, p.url.as_deref()).await;
     }
     let chrome_path = match p.chrome_path.filter(|s| !s.is_empty()) {
         Some(path) => PathBuf::from(path),
@@ -264,22 +291,60 @@ async fn connect_page(session: &SessionParams) -> Result<(Cdp, chrome::Target), 
 
 async fn session_status(params: Value) -> Result<Value, String> {
     let s: SessionParams = parse(params)?;
+    let settings = settings_from(s.settings)?;
     if !chrome::is_reachable(s.port).await {
-        return Ok(json!({ "reachable": false, "ready": false, "page": null }));
+        return Ok(json!({ "reachable": false, "ready": false, "page": null, "pageCount": 0 }));
     }
-    let targets = chrome::list_targets(s.port).await?;
-    let Some(page) = chrome::pick_page(&targets, &s.url_contains) else {
-        return Ok(json!({ "reachable": true, "ready": false, "page": null }));
+    let pages = chrome::list_pages(s.port).await?;
+    // On macOS, closing the last window leaves Chrome (and its debug port)
+    // running with no tabs: reachable, but nothing to show or drive.
+    let page_count = pages.len();
+    let Some(page) = chrome::pick_page(&pages, &s.url_contains) else {
+        return Ok(
+            json!({ "reachable": true, "ready": false, "page": null, "pageCount": page_count }),
+        );
     };
     let ws = page
         .web_socket_debugger_url
         .clone()
         .ok_or("tab is not debuggable")?;
     let mut cdp = Cdp::connect(&ws).await?;
-    let ready = form::is_ready(&mut cdp, &s.settings).await?;
-    Ok(
-        json!({ "reachable": true, "ready": ready, "page": { "title": page.title, "url": page.url } }),
-    )
+    let ready = form::is_ready(&mut cdp, &settings).await?;
+    Ok(json!({
+        "reachable": true,
+        "ready": ready,
+        "page": { "title": page.title, "url": page.url },
+        "pageCount": page_count
+    }))
+}
+
+/// Ask Chrome to quit through its own protocol (`Browser.close`), which shuts
+/// down cleanly and flushes the profile — cookies included — unlike killing the
+/// process. Waits for the debug port to go away so the answer is truthful.
+async fn close_chrome(params: Value) -> Result<Value, String> {
+    #[derive(Deserialize)]
+    struct P {
+        #[serde(default = "default_port")]
+        port: u16,
+    }
+    let p: P = parse(params)?;
+    if BATCH_ACTIVE.load(Ordering::SeqCst) {
+        return Err("a batch is running — stop it first".into());
+    }
+    if !chrome::is_reachable(p.port).await {
+        return Ok(json!({ "closed": true, "wasOpen": false }));
+    }
+    let ws = chrome::browser_ws_url(p.port).await?;
+    let mut browser = Cdp::connect(&ws).await?;
+    // The socket usually drops before a reply arrives; that is success here.
+    let _ = browser.call("Browser.close", json!({})).await;
+    for _ in 0..40 {
+        if !chrome::is_reachable(p.port).await {
+            return Ok(json!({ "closed": true, "wasOpen": true }));
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    Err("Chrome did not close; it may be waiting on a dialog (for example, unsaved forms)".into())
 }
 
 async fn run_batch(id: String, params: Value, tx: Tx) {
@@ -309,35 +374,54 @@ async fn run_batch_inner(id: &str, params: Value, tx: &Tx) -> Result<(), String>
         .insert(run_id.clone(), cancel.clone());
     let _guard = BatchGuard(run_id.clone());
 
+    let settings = settings_from(p.session.settings.clone())?;
     let (mut cdp, _page) = connect_page(&p.session).await?;
-    if !form::is_ready(&mut cdp, &p.session.settings).await? {
-        return Err(
-            "the page does not look logged in (create button not found) — sign in, then retry"
-                .into(),
-        );
-    }
+    // Wait (bounded) for the page to finish loading before touching anything.
+    form::wait_ready(&mut cdp, &settings).await?;
 
     let send = |v: Value| {
         let _ = tx.send(Response::event(id.to_string(), v));
     };
-    send(json!({ "type": "started", "runId": run_id, "total": p.rows.len() }));
+    let behavior = &settings.behavior;
+    send(json!({
+        "type": "started", "runId": run_id, "total": p.rows.len(), "dryRun": behavior.dry_run
+    }));
 
     let (mut ok, mut failed, mut cancelled, mut aborted) = (0usize, 0usize, false, false);
+    let mut in_a_row = 0u32;
     for (index, row) in p.rows.iter().enumerate() {
         if cancel.load(Ordering::SeqCst) {
             cancelled = true;
             break;
         }
         send(json!({ "type": "row-start", "index": index, "serviceCode": row.service_code }));
-        match form::run_row(&mut cdp, row, &p.session.settings).await {
-            Ok(()) => {
+        match form::run_row(&mut cdp, row, &settings).await {
+            Ok(outcome) => {
                 ok += 1;
-                send(json!({ "type": "row-done", "index": index }));
+                in_a_row = 0;
+                let kind = if outcome == RowOutcome::Filled {
+                    "row-filled"
+                } else {
+                    "row-done"
+                };
+                send(json!({ "type": kind, "index": index }));
             }
             Err(e) => {
                 failed += 1;
+                in_a_row += 1;
+                let last_error = e.clone();
                 eprintln!("row {index} failed: {e}");
                 send(json!({ "type": "row-error", "index": index, "error": e }));
+                // The window or Chrome itself was closed: nothing left to drive.
+                if cdp.is_closed() {
+                    aborted = true;
+                    send(json!({
+                        "type": "aborted",
+                        "index": index,
+                        "error": "the Chrome window was closed during the run; open it again, sign in if needed, and re-run the remaining rows"
+                    }));
+                    break;
+                }
                 // Never fill the next row into a dialog left open by this one.
                 if !form::wait_dialog_closed(&mut cdp, 3_000).await {
                     aborted = true;
@@ -348,6 +432,21 @@ async fn run_batch_inner(id: &str, params: Value, tx: &Tx) -> Result<(), String>
                     }));
                     break;
                 }
+                // Many failures back to back usually mean the session expired or
+                // the page changed — stop instead of grinding through every row.
+                let limit = behavior.max_consecutive_failures;
+                if limit > 0 && in_a_row >= limit {
+                    aborted = true;
+                    send(json!({
+                        "type": "aborted",
+                        "index": index,
+                        "error": format!(
+                            "{in_a_row} rows failed in a row — the session may have expired or the page changed. Last error: {}",
+                            last_error
+                        )
+                    }));
+                    break;
+                }
             }
         }
     }
@@ -355,6 +454,12 @@ async fn run_batch_inner(id: &str, params: Value, tx: &Tx) -> Result<(), String>
         json!({ "type": "finished", "ok": ok, "failed": failed, "cancelled": cancelled, "aborted": aborted }),
     );
     Ok(())
+}
+
+fn parse_csv_request(params: Value) -> Result<Value, String> {
+    let p: CsvParams = parse(params)?;
+    let columns = columns_from(p.columns)?;
+    Ok(json!(rows::parse_csv(&p.text, p.skip_header, &columns)))
 }
 
 fn cancel_batch(params: Value) -> Result<Value, String> {
@@ -385,9 +490,8 @@ async fn handle(req: Request, tx: Tx) {
     let result = match method.as_str() {
         "launch-chrome" => launch_chrome(params).await,
         "session-status" => session_status(params).await,
-        "parse-csv" => {
-            parse::<CsvParams>(params).map(|p| json!(rows::parse_csv(&p.text, p.skip_header)))
-        }
+        "parse-csv" => parse_csv_request(params),
+        "close-chrome" => close_chrome(params).await,
         "cancel-batch" => cancel_batch(params),
         "run-batch" => return run_batch(id, params, tx).await,
         other => Err(format!("unsupported method: \"{other}\"")),

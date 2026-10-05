@@ -31,6 +31,7 @@
     "bin": "devtool-svc-service-list-automation",
     "methods": [
       "launch-chrome",
+      "close-chrome",
       "session-status",
       "parse-csv",
       "run-batch",

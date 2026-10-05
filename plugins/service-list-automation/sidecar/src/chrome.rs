@@ -16,6 +16,8 @@ use tokio::net::TcpStream;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Target {
+    #[serde(default)]
+    pub id: String,
     #[serde(rename = "type")]
     pub kind: String,
     #[serde(default)]
@@ -164,6 +166,27 @@ pub async fn is_reachable(port: u16) -> bool {
     http_get(port, "/json/version").await.is_ok()
 }
 
+/// The browser-level websocket (not a tab), for window management:
+/// `Target.createTarget`, `Target.activateTarget`, `Browser.close`.
+pub async fn browser_ws_url(port: u16) -> Result<String, String> {
+    let body = http_get(port, "/json/version").await?;
+    let v: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("bad /json/version payload: {e}"))?;
+    v.get("webSocketDebuggerUrl")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| "Chrome did not report a browser websocket".to_string())
+}
+
+/// Real windows' tabs only: not service workers, extension pages or the like.
+pub async fn list_pages(port: u16) -> Result<Vec<Target>, String> {
+    Ok(list_targets(port)
+        .await?
+        .into_iter()
+        .filter(|t| t.kind == "page")
+        .collect())
+}
+
 pub async fn list_targets(port: u16) -> Result<Vec<Target>, String> {
     let body = http_get(port, "/json").await?;
     serde_json::from_str(&body).map_err(|e| format!("bad /json payload: {e}"))
@@ -229,6 +252,7 @@ mod tests {
 
     fn target(kind: &str, url: &str, ws: bool) -> Target {
         Target {
+            id: String::new(),
             kind: kind.into(),
             title: String::new(),
             url: url.into(),

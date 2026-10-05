@@ -11,6 +11,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 pub struct Cdp {
     ws: WebSocketStream<MaybeTlsStream<TcpStream>>,
     next_id: u64,
+    closed: bool,
 }
 
 impl Cdp {
@@ -18,10 +19,29 @@ impl Cdp {
         let (ws, _) = tokio_tungstenite::connect_async(ws_url)
             .await
             .map_err(|e| format!("CDP connect failed: {e}"))?;
-        Ok(Self { ws, next_id: 0 })
+        Ok(Self {
+            ws,
+            next_id: 0,
+            closed: false,
+        })
+    }
+
+    /// True once the websocket died — the tab or the whole browser was closed.
+    /// Everything after that fails the same way, so callers use this to stop
+    /// instead of treating each later failure as a separate problem.
+    pub fn is_closed(&self) -> bool {
+        self.closed
     }
 
     pub async fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let result = self.call_inner(method, params).await;
+        if matches!(&result, Err(e) if e.starts_with("CDP ")) {
+            self.closed = true;
+        }
+        result
+    }
+
+    async fn call_inner(&mut self, method: &str, params: Value) -> Result<Value, String> {
         self.next_id += 1;
         let id = self.next_id;
         let frame = json!({ "id": id, "method": method, "params": params }).to_string();
@@ -71,6 +91,32 @@ impl Cdp {
             return Err(first_line(msg));
         }
         Ok(res.pointer("/result/value").cloned().unwrap_or(Value::Null))
+    }
+
+    /// A real left click at viewport coordinates: the page sees trusted
+    /// mouse events, like a user (or Selenium's native click).
+    pub async fn mouse_click(&mut self, x: f64, y: f64) -> Result<(), String> {
+        self.call(
+            "Input.dispatchMouseEvent",
+            json!({ "type": "mouseMoved", "x": x, "y": y }),
+        )
+        .await?;
+        for kind in ["mousePressed", "mouseReleased"] {
+            self.call(
+                "Input.dispatchMouseEvent",
+                json!({ "type": kind, "x": x, "y": y, "button": "left", "clickCount": 1 }),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Type `text` into the focused element via the browser's editing pipeline,
+    /// so `input` events fire as for real typing and `maxlength` applies.
+    pub async fn insert_text(&mut self, text: &str) -> Result<(), String> {
+        self.call("Input.insertText", json!({ "text": text }))
+            .await
+            .map(|_| ())
     }
 
     pub async fn press_escape(&mut self) -> Result<(), String> {

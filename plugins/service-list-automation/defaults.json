@@ -1,0 +1,59 @@
+{
+  "connection": {
+    "port": 9222,
+    "url": "",
+    "urlContains": "",
+    "chromePath": ""
+  },
+  "csv": {
+    "skipHeader": true,
+    "columns": {
+      "mid": 0,
+      "serviceCode": 1,
+      "serviceDescription": 2,
+      "merchantName": 3,
+      "l2": 6,
+      "l3": 7,
+      "l4": 8,
+      "l6": 9
+    }
+  },
+  "form": {
+    "constants": {
+      "l1": "SME OFFLINE",
+      "l5": "OTHER",
+      "groupCodeL1": "PAYMENT",
+      "project": "SME OFFLINE"
+    },
+    "verticalOverrides": {
+      "GROCERY": "GROCERY - OTHER"
+    },
+    "ids": {
+      "create": "B71233594014006408",
+      "serviceCode": "P7_SERVICE_CODE_input",
+      "serviceDescription": "P7_SERVICE_DESCRIPTION_input",
+      "merchant": "P7_MERCHANT_input",
+      "l1": "P7_BU_GROUP_CODE_L1_ID",
+      "l2": "P7_BU_GROUP_CODE_L2_ID",
+      "l3": "P7_BU_GROUP_CODE_L3_ID",
+      "l4": "P7_BU_GROUP_CODE_L4_ID",
+      "l5": "P7_BU_GROUP_CODE_L5_ID",
+      "l6": "P7_BU_GROUP_CODE_L6_ID",
+      "groupCodeL1": "P7_GROUP_CODE_L1_ID",
+      "vertical": "P7_NEWVERTICAL_ID",
+      "project": "P7_SPECIALPROJECT_ID",
+      "check": "P7_CHECK",
+      "submit": "B71221230860006389"
+    }
+  },
+  "behavior": {
+    "timeoutMs": 10000,
+    "closeTimeoutMs": 10000,
+    "readyTimeoutMs": 15000,
+    "inputMode": "trusted",
+    "optionMatch": "exact",
+    "maxConsecutiveFailures": 3,
+    "dryRun": false,
+    "dryRunHoldMs": 1500
+  }
+}
