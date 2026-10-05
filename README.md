@@ -30,3 +30,11 @@ DevTool → **Settings → Extensions**: paste the plugin's `pluginManifestUrl` 
 `catalog.json`, then its `serviceManifestUrl`, and restart the app.
 
 See the host's `docs/plugin-sdk/` for the manifest, SDK and sidecar contracts.
+
+## Host requirement for `service-list-automation`
+
+Its sidecar `devtool-svc-service-list-automation` must be listed in the host's
+`ALLOWED_SERVICES` (`src-tauri/src/service_host.rs` in the DevTool repo). Installing
+a sidecar from a URL does **not** grant permission to run a new binary name, so until
+that one-line change ships in a DevTool build, the plugin installs but its service
+calls are refused.
