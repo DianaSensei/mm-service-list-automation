@@ -20,6 +20,7 @@ on:
         required: true
         type: choice
         options:
+          - service-list-automation
           # scripts/create-plugin.mjs inserts new plugin ids above this
           # line automatically. Added a plugin branch some other way?
           # Add its id here by hand.

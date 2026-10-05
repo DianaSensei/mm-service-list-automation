@@ -23,3 +23,31 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
 
+
+  # ── service-list-automation (app/service-list-automation/main) ──────────────────────────────
+  - package-ecosystem: npm
+    directory: /
+    target-branch: app/service-list-automation/main
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: app/service-list-automation/main
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: cargo
+    directory: /plugins/service-list-automation/sidecar
+    target-branch: app/service-list-automation/main
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
