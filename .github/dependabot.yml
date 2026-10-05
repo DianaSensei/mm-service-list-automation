@@ -1,0 +1,25 @@
+version: 2
+
+# This file is only ever read from the repo's DEFAULT branch (main, the
+# skeleton) — each entry below that targets a plugin (`target-branch:
+# app/<id>/main`) still works because Dependabot resolves `directory`
+# relative to that target branch, not to main. main has no plugins/ dir, so
+# only its own npm/github-actions entries (no target-branch) actually touch
+# main's own tree.
+updates:
+  # main's own skeleton deps (shared/ + tooling).
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+

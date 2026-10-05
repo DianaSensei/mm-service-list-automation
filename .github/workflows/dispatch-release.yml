@@ -1,0 +1,59 @@
+name: Dispatch plugin release
+
+# Lives on `main` so the "Run workflow" button actually shows up in the
+# Actions UI — GitHub only renders that button for workflow files that
+# exist on the repo's DEFAULT branch. Each plugin's own release.yml lives
+# only on its app/<id>/main branch (main is the skeleton, it has no
+# release.yml of its own), so without this dispatcher there's no button to
+# click at all for any of them — see README.md.
+#
+# This job doesn't build or release anything itself: it just fires
+# workflow_dispatch on the chosen plugin branch's own release.yml via the
+# GitHub API, using this run's own GITHUB_TOKEN (actions: write is enough
+# to trigger a workflow_dispatch run in the SAME repo — no extra secret
+# needed).
+on:
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: 'Which plugin to release'
+        required: true
+        type: choice
+        options:
+          # scripts/create-plugin.mjs inserts new plugin ids above this
+          # line automatically. Added a plugin branch some other way?
+          # Add its id here by hand.
+      version_number:
+        description: 'Version number only, e.g. 1.0.2 — the plugin id above is prepended for you (becomes <plugin>-v<this>)'
+        required: true
+        type: string
+
+permissions:
+  actions: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build the full tag and validate it
+        id: tag
+        run: |
+          set -euo pipefail
+          version_number="${{ inputs.version_number }}"
+          if [[ ! "$version_number" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'$version_number' doesn't look like a version number (expected e.g. 1.0.2) — don't include the plugin id or a leading 'v', those are added for you."
+            exit 1
+          fi
+          echo "value=${{ inputs.plugin }}-v$version_number" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger release.yml on app/${{ inputs.plugin }}/main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.tag.outputs.value }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${{ github.repository }}/actions/workflows/release.yml/dispatches" \
+            -f "ref=app/${{ inputs.plugin }}/main" \
+            -f "inputs[version]=${RELEASE_TAG}"
+          echo "Triggered release.yml on app/${{ inputs.plugin }}/main with tag ${RELEASE_TAG}"
+          echo "Watch it at: https://github.com/${{ github.repository }}/actions/workflows/release.yml?query=branch%3Aapp%2F${{ inputs.plugin }}%2Fmain"
