@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
@@ -14,9 +18,20 @@
     "isolatedModules": true,
     "noEmit": true,
     "paths": {
-      "@/*": ["./shared/*"]
+      "@/*": [
+        "./shared/*"
+      ]
     }
   },
-  "include": ["shared/**/*.ts", "shared/**/*.tsx"],
-  "exclude": ["**/*.test.ts", "**/*.test.tsx"]
+  "include": [
+    "plugins/**/*.ts",
+    "plugins/**/*.tsx",
+    "shared/**/*.ts",
+    "shared/**/*.tsx"
+  ],
+  "exclude": [
+    "plugins/*/vite.config.ts",
+    "**/*.test.ts",
+    "**/*.test.tsx"
+  ]
 }

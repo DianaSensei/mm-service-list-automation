@@ -1,0 +1,28 @@
+{
+  "kind": "plugin",
+  "id": "service-list-automation",
+  "version": "0.0.0",
+  "sdk": "^1.0.0",
+  "entry": "REPLACED_BY_CI",
+  "integrity": "REPLACED_BY_CI",
+  "label": "Service List",
+  "description": "Fill the merchant service-list form from a CSV, driving a Chrome session you log in to yourself.",
+  "icon": "puzzle",
+  "keywords": [
+    "service-list-automation"
+  ],
+  "route": "/service-list-automation",
+  "permissions": [
+    "storage",
+    "native",
+    "service"
+  ],
+  "commands": [
+    "mcp_"
+  ],
+  "hosts": [],
+  "service": {
+    "bin": "devtool-svc-service-list-automation",
+    "methods": []
+  }
+}

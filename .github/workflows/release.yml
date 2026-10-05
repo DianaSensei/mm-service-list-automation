@@ -1,0 +1,192 @@
+name: Release service-list-automation
+
+# This branch (app/service-list-automation/main) releases ONLY the service-list-automation plugin — forked
+# from the devtool-plugins skeleton (main); see that branch's README.md
+# for why plugins live on their own branches instead of one monorepo tree
+# (fault isolation + independent versioning per plugin).
+#
+# Tag push (service-list-automation-v*) builds the plugin bundle (kind="plugin") and its sidecar
+# binary (kind="service") for the target triples below, computes SHA-256
+# for each artifact, fills the manifest templates with real URLs/integrity,
+# and publishes everything as assets on a GitHub Release — then merges
+# just this plugin's entry into the aggregated catalog.json living on
+# `main` (see the `publish` job's last steps), never touching any other
+# plugin's entry there.
+#
+# Also runnable manually (workflow_dispatch) for environments that can drive
+# the GitHub Actions API but can't push a tag ref (e.g. a scoped CI bot
+# token). `gh release create` below creates the tag itself, pointed at
+# whatever ref the manual run used, if it doesn't already exist.
+env:
+  PLUGIN_ID: service-list-automation
+
+on:
+  push:
+    tags:
+      - 'service-list-automation-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag to create (e.g. service-list-automation-v0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build-plugins:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint:manifests
+      - run: npm run typecheck
+      - run: npm test
+
+      - name: Build every plugin bundle
+        run: npm run build
+
+      - name: Upload bundle artifacts for the sidecar job to attach manifests to
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: plugin-bundles
+          path: |
+            plugins/*/dist/bundle.mjs
+
+  build-sidecars:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            rust-target: x86_64-unknown-linux-gnu
+          - platform: macos-latest
+            rust-target: aarch64-apple-darwin
+          - platform: windows-latest
+            rust-target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable branch
+        with:
+          toolchain: stable
+          targets: ${{ matrix.rust-target }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            plugins/service-list-automation/sidecar -> target
+
+      - name: Build every sidecar
+        shell: bash
+        run: |
+          set -euo pipefail
+          for dir in plugins/*/sidecar; do
+            [ -f "$dir/Cargo.toml" ] || continue
+            echo "== $dir =="
+            (cd "$dir" && cargo build --release --target ${{ matrix.rust-target }})
+          done
+
+      - name: Collect binaries (rename with target triple, add .exe on Windows)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          EXT=""
+          if [ "${{ runner.os }}" = "Windows" ]; then EXT=".exe"; fi
+          for dir in plugins/*/sidecar; do
+            [ -f "$dir/Cargo.toml" ] || continue
+            bin=$(grep -m1 '^name = ' "$dir/Cargo.toml" | sed -E 's/name = "(.*)"/\1/')
+            cp "$dir/target/${{ matrix.rust-target }}/release/${bin}${EXT}" \
+               "out/${bin}-${{ matrix.rust-target }}${EXT}"
+          done
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sidecars-${{ matrix.rust-target }}
+          path: out/*
+
+  publish:
+    needs: [build-plugins, build-sidecars]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v6.0.0
+        with:
+          pattern: 'plugin-bundles'
+          path: downloaded/bundles
+          merge-multiple: true
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v6.0.0
+        with:
+          pattern: 'sidecars-*'
+          path: downloaded/sidecars
+          merge-multiple: true
+
+      - name: Resolve release tag (workflow_dispatch input, or the pushed tag)
+        run: echo "RELEASE_TAG=${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}" >> "$GITHUB_ENV"
+
+      - name: Build manifests + catalog.json and stage release assets
+        run: node scripts/build-release.mjs
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TAG: ${{ env.RELEASE_TAG }}
+
+      # --draft: everything past this point can still fail, and a draft is
+      # invisible to anything reading the release — so a failure here leaves
+      # an unfinished DRAFT, not a broken live release.
+      - name: Publish GitHub Release (draft)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "${RELEASE_TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${RELEASE_TAG}" \
+            --notes "Automated build of the ${PLUGIN_ID} plugin/sidecar." \
+            --target "${{ github.sha }}" \
+            --draft \
+            release-assets/*
+
+      # catalog.json lives as a committed file on `main` (the skeleton
+      # branch), not a release asset (release-asset storage doesn't send
+      # CORS headers, which starlight-site's fetch needs). This branch only
+      # builds/releases ONE plugin, so release-assets/catalog.json above has
+      # exactly one entry — merge it into main's copy instead of overwriting,
+      # so every other plugin's entry survives untouched.
+      - name: Merge this plugin's entry into main's catalog.json and commit
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git show origin/main:catalog.json > /tmp/base-catalog.json 2>/dev/null || echo '{"plugins":[]}' > /tmp/base-catalog.json
+          node scripts/merge-catalog-entry.mjs /tmp/base-catalog.json release-assets/catalog.json /tmp/merged-catalog.json
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git switch -c catalog-sync origin/main
+          cp /tmp/merged-catalog.json catalog.json
+          git add catalog.json
+          git diff --cached --quiet && exit 0
+          git commit -m "catalog: update ${PLUGIN_ID} to ${RELEASE_TAG}"
+          git push origin HEAD:main
+
+      # The point of no return: everything above succeeded, so this is the
+      # first point the release becomes visible to anything reading it.
+      - name: Publish the release (flip draft -> published)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${RELEASE_TAG}" --draft=false --repo "${GITHUB_REPOSITORY}"
