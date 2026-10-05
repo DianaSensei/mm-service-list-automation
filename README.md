@@ -33,8 +33,9 @@ See the host's `docs/plugin-sdk/` for the manifest, SDK and sidecar contracts.
 
 ## Host requirement for `service-list-automation`
 
-Its sidecar `devtool-svc-service-list-automation` must be listed in the host's
-`ALLOWED_SERVICES` (`src-tauri/src/service_host.rs` in the DevTool repo). Installing
-a sidecar from a URL does **not** grant permission to run a new binary name, so until
-that one-line change ships in a DevTool build, the plugin installs but its service
-calls are refused.
+Its sidecar `devtool-svc-service-list-automation` is not bundled with DevTool, so the
+first time the plugin calls it DevTool shows a native dialog with the program's path and
+SHA-256 and asks whether to allow it. The answer is remembered in the OS keychain for that
+exact file (a new release asks again). This needs a DevTool build that includes the
+user-approved-sidecar change (branch `feat/user-approved-sidecars` in the DevTool repo at
+the time of writing); on older builds the plugin installs but its calls are refused.
