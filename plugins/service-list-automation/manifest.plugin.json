@@ -7,22 +7,34 @@
   "integrity": "REPLACED_BY_CI",
   "label": "Service List",
   "description": "Fill the merchant service-list form from a CSV, driving a Chrome session you log in to yourself.",
-  "icon": "puzzle",
+  "icon": "list-checks",
   "keywords": [
-    "service-list-automation"
+    "service list",
+    "merchant",
+    "csv",
+    "automation",
+    "chrome",
+    "form",
+    "bulk",
+    "import",
+    "apex"
   ],
   "route": "/service-list-automation",
   "permissions": [
     "storage",
-    "native",
+    "files:read",
     "service"
   ],
-  "commands": [
-    "mcp_"
-  ],
+  "commands": [],
   "hosts": [],
   "service": {
     "bin": "devtool-svc-service-list-automation",
-    "methods": []
+    "methods": [
+      "launch-chrome",
+      "session-status",
+      "parse-csv",
+      "run-batch",
+      "cancel-batch"
+    ]
   }
 }

@@ -1,0 +1,30 @@
+<!doctype html><html><head><title>submitted:0</title></head><body>
+<button id="B71233594014006408">Create</button>
+<script>
+const subs = [];
+const frameHtml = `<!doctype html><body>
+<input id="P7_SERVICE_CODE_input"><input id="P7_SERVICE_DESCRIPTION_input"><input id="P7_MERCHANT_input">
+${['P7_BU_GROUP_CODE_L1_ID','P7_BU_GROUP_CODE_L2_ID','P7_BU_GROUP_CODE_L3_ID','P7_BU_GROUP_CODE_L4_ID','P7_BU_GROUP_CODE_L5_ID','P7_BU_GROUP_CODE_L6_ID','P7_GROUP_CODE_L1_ID','P7_NEWVERTICAL_ID','P7_SPECIALPROJECT_ID'].map(i=>`<select id="${i}"><option></option></select>`).join('')}
+<input type="checkbox" id="P7_CHECK"><button id="B71221230860006389">Submit</button>
+<script>
+const $=id=>document.getElementById(id);
+addEventListener('keydown',e=>{if(e.key==='Escape')parent.postMessage({esc:1},'*')});
+const fill=(id,opts)=>setTimeout(()=>{const s=$(id);s.innerHTML='<option></option>'+opts.map(o=>'<option>  '+o+'  </option>').join('')},250);
+fill('P7_BU_GROUP_CODE_L1_ID',['SME OFFLINE','OTHER']);
+$('P7_BU_GROUP_CODE_L1_ID').onchange=()=>fill('P7_BU_GROUP_CODE_L2_ID',['L2A','L2B']);
+$('P7_BU_GROUP_CODE_L2_ID').onchange=()=>fill('P7_BU_GROUP_CODE_L3_ID',['GROCERY','FASHION']);
+$('P7_BU_GROUP_CODE_L3_ID').onchange=()=>fill('P7_BU_GROUP_CODE_L4_ID',['L4A']);
+$('P7_BU_GROUP_CODE_L4_ID').onchange=()=>fill('P7_BU_GROUP_CODE_L5_ID',['OTHER']);
+$('P7_BU_GROUP_CODE_L5_ID').onchange=()=>fill('P7_BU_GROUP_CODE_L6_ID',['L6A','L6B']);
+fill('P7_GROUP_CODE_L1_ID',['PAYMENT']); fill('P7_NEWVERTICAL_ID',['GROCERY - OTHER','FASHION']); fill('P7_SPECIALPROJECT_ID',['SME OFFLINE']);
+$('B71221230860006389').onclick=()=>{
+  const v=id=>$(id).value; const row=['P7_SERVICE_CODE_input','P7_SERVICE_DESCRIPTION_input','P7_MERCHANT_input','P7_BU_GROUP_CODE_L1_ID','P7_BU_GROUP_CODE_L2_ID','P7_BU_GROUP_CODE_L3_ID','P7_BU_GROUP_CODE_L4_ID','P7_BU_GROUP_CODE_L5_ID','P7_BU_GROUP_CODE_L6_ID','P7_GROUP_CODE_L1_ID','P7_NEWVERTICAL_ID','P7_SPECIALPROJECT_ID'].map(v).map(s=>s.trim());
+  row.push($('P7_CHECK').checked); parent.postMessage({row},'*');
+};
+<\/script></body>`;
+addEventListener('message',e=>{ if(e.data.esc){ if(location.hash==='#esc'){const f=document.querySelector('iframe');f&&f.remove()} return;} if(!e.data.row)return; subs.push(e.data.row); document.title='submitted:'+JSON.stringify(subs);
+  setTimeout(()=>document.querySelector('iframe').remove(),200)});
+addEventListener('keydown',e=>{if(e.key==='Escape'&&location.hash==='#esc'){const f=document.querySelector('iframe');f&&f.remove()}});
+document.getElementById('B71233594014006408').onclick=()=>{ if(document.querySelector('iframe'))return;
+  const f=document.createElement('iframe'); f.srcdoc=frameHtml; f.style.cssText='width:600px;height:400px'; document.body.appendChild(f); };
+</script></body></html>
