@@ -39,9 +39,9 @@ function sidecar() {
   return { call, stop };
 }
 
-const csv = (rows) => ['MID,SC,DESC,MERCH,x,y,L2,L3,L4,L6', ...rows].join('\n');
-const GOOD = (n, merch = 'Shop') => `M${n},SC${n},Desc ${n},${merch},,,L2A,FASHION,L4A,L6A`;
-const BAD = (n) => `M${n},SC${n},Bad ${n},Shop,,,L2A,NOPE,L4A,L6A`;
+const csv = (rows) => ['MID,SERVICE_CODE,SERVICE_DESCRIPTION,MERCHANT,CATEGORY,BU Group code L2,BU Group code L3,BU Group code L4,BU Group code L6', ...rows].join('\n');
+const GOOD = (n, merch = 'Shop') => `M${n},SC${n},Desc ${n},${merch},cat,L2A,FASHION,L4A,L6A`;
+const BAD = (n) => `M${n},SC${n},Bad ${n},Shop,cat,L2A,NOPE,L4A,L6A`;
 const fast = { behavior: { timeoutMs: 2500, closeTimeoutMs: 2000 } };
 
 const tabs = async () => (await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()).filter((t) => t.type === 'page');

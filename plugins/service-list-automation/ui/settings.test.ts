@@ -21,10 +21,12 @@ function leaves(v: unknown, prefix = ''): string[] {
 }
 
 describe('defaults.json', () => {
-  it('matches the original Java tool', () => {
+  it('matches the current form and the 9-column CSV template', () => {
     expect(DEFAULT_SETTINGS.form.ids.create).toBe('B71233594014006408');
     expect(DEFAULT_SETTINGS.form.constants.l1).toBe('SME OFFLINE');
-    expect(DEFAULT_SETTINGS.csv.columns).toMatchObject({ serviceCode: 1, l2: 6, l3: 7, l4: 8, l6: 9 });
+    // MID, code, description, merchant, CATEGORY, L2, L3, L4, L6 (0-based).
+    expect(DEFAULT_SETTINGS.csv.columns).toMatchObject({ serviceCode: 1, l2: 5, l3: 6, l4: 7, l6: 8 });
+    expect(DEFAULT_SETTINGS.csv.autoDetect).toBe(true);
     expect(DEFAULT_SETTINGS.behavior.inputMode).toBe('trusted');
     expect(DEFAULT_SETTINGS.behavior.dryRun).toBe(false);
   });

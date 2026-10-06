@@ -227,15 +227,16 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_the_original_java_tool() {
+    fn defaults_match_the_current_template_and_form() {
         let s = RunSettings::default();
         assert_eq!(s.form.constants.l1, "SME OFFLINE");
         assert_eq!(s.form.ids.create, "B71233594014006408");
         assert_eq!(s.form.vertical_for("grocery"), "GROCERY - OTHER");
         assert_eq!(s.form.vertical_for("FASHION"), "FASHION");
         let c = Columns::default();
-        assert_eq!((c.service_code, c.l2, c.l3, c.l4, c.l6), (1, 6, 7, 8, 9));
-        assert_eq!(c.min_len(), 10);
+        // The 9-column template: MID, code, description, merchant, CATEGORY, L2, L3, L4, L6.
+        assert_eq!((c.service_code, c.l2, c.l3, c.l4, c.l6), (1, 5, 6, 7, 8));
+        assert_eq!(c.min_len(), 9);
     }
 
     #[test]

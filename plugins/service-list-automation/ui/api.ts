@@ -17,6 +17,23 @@ export interface CsvError {
   error: string;
 }
 
+/** Where one field's value came from in the CSV. */
+export interface MappingEntry {
+  field: 'mid' | 'serviceCode' | 'serviceDescription' | 'merchantName' | 'l2' | 'l3' | 'l4' | 'l6';
+  /** 1-based column number. */
+  column: number;
+  header: string | null;
+  /** Found by header name (true) or taken from the configured column (false). */
+  detected: boolean;
+}
+
+export interface ParsedCsv {
+  rows: ServiceRow[];
+  errors: CsvError[];
+  mapping: MappingEntry[];
+  header: string[];
+}
+
 export interface SessionStatus {
   reachable: boolean;
   /** The create button is on the page, i.e. the user is signed in. */
@@ -62,9 +79,10 @@ export function createApi(sdk: PluginSdk) {
         settings: sidecarSettings(s),
       }),
     parseCsv: (text: string, s: Settings) =>
-      sdk.service.call<{ rows: ServiceRow[]; errors: CsvError[] }>('parse-csv', {
+      sdk.service.call<ParsedCsv>('parse-csv', {
         text,
         skipHeader: s.csv.skipHeader,
+        autoDetect: s.csv.autoDetect,
         columns: s.csv.columns,
       }),
     runBatch: (s: Settings, rows: ServiceRow[], onEvent: (e: BatchEvent) => void) =>

@@ -170,6 +170,9 @@ struct LaunchParams {
     profile_dir: Option<String>,
     url: Option<String>,
 }
+fn yes() -> bool {
+    true
+}
 fn default_port() -> u16 {
     DEFAULT_PORT
 }
@@ -182,6 +185,8 @@ struct CsvParams {
     skip_header: bool,
     #[serde(default)]
     columns: Value,
+    #[serde(default = "yes")]
+    auto_detect: bool,
 }
 
 #[derive(Deserialize)]
@@ -459,7 +464,12 @@ async fn run_batch_inner(id: &str, params: Value, tx: &Tx) -> Result<(), String>
 fn parse_csv_request(params: Value) -> Result<Value, String> {
     let p: CsvParams = parse(params)?;
     let columns = columns_from(p.columns)?;
-    Ok(json!(rows::parse_csv(&p.text, p.skip_header, &columns)))
+    Ok(json!(rows::parse_csv(
+        &p.text,
+        p.skip_header,
+        &columns,
+        p.auto_detect
+    )))
 }
 
 fn cancel_batch(params: Value) -> Result<Value, String> {

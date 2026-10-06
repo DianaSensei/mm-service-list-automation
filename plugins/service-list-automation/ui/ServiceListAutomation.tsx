@@ -6,11 +6,15 @@ import { Input } from '@/components/ui/input';
 import { Segmented } from '@/components/ui/segmented';
 import { StatusDot } from '@/components/ui/status-dot';
 import { Switch } from '@/components/ui/switch';
-import { CLOSED_STATUS, createApi, type CsvError, type ServiceRow, type SessionStatus } from './api';
+import { CLOSED_STATUS, createApi, type CsvError, type ParsedCsv, type ServiceRow, type SessionStatus } from './api';
 import { initialBatchState, reduceBatch, type BatchState, type RowStatus } from './batchState';
 import { chromeView, closedBehindOurBack } from './chromeView';
+import { ColumnCheck } from './ColumnCheck';
+import { FixedValues } from './FixedValues';
+import { cleanPresets } from './presets';
 import { SettingsScreen } from './SettingsScreen';
 import { DEFAULT_SETTINGS, setPath, withDefaults, type Settings } from './settings';
+import { checkKey } from './verify';
 
 const PLUGIN_ID = 'service-list-automation';
 const POLL_MS = 2000;
@@ -47,12 +51,16 @@ export function ServiceListAutomation() {
   // Saved state may be partial or from an older version; always run on the merge.
   const settings = useMemo(() => withDefaults(saved), [saved]);
   const update = useCallback((next: Settings) => setSaved(next), [setSaved]);
+  const [savedPresets, setSavedPresets] = usePluginState<unknown>(sdk, 'presets', []);
+  const presets = useMemo(() => cleanPresets(savedPresets), [savedPresets]);
 
   const [tab, setTab] = useState<Tab>('run');
   const [session, setSession] = useState<SessionStatus | null>(null);
   const [busy, setBusy] = useState<'opening' | 'closing' | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [csvName, setCsvName] = useState<string | null>(null);
+  const [parsed, setParsed] = useState<ParsedCsv | null>(null);
+  const [confirmedKey, setConfirmedKey] = useState<string | null>(null);
   const [rows, setRows] = useState<ServiceRow[]>([]);
   const [csvErrors, setCsvErrors] = useState<CsvError[]>([]);
   const [batch, setBatch] = useState<BatchState>(() => initialBatchState());
@@ -96,10 +104,11 @@ export function ServiceListAutomation() {
 
   const parse = useCallback(
     async (text: string, s: Settings) => {
-      const parsed = await api.parseCsv(text, s);
-      setRows(parsed.rows);
-      setCsvErrors(parsed.errors);
-      setBatch(initialBatchState(parsed.rows.length));
+      const result = await api.parseCsv(text, s);
+      setParsed(result);
+      setRows(result.rows);
+      setCsvErrors(result.errors);
+      setBatch(initialBatchState(result.rows.length));
     },
     [api],
   );
@@ -179,7 +188,11 @@ export function ServiceListAutomation() {
   };
 
   const dryRun = settings.behavior.dryRun;
-  const canRun = view.state === 'ready' && rows.length > 0 && !batch.running;
+  // The confirmation is for exactly this file, mapping and fixed values: any change voids it.
+  const currentKey = parsed ? checkKey(csvName, rows.length, parsed.mapping, settings) : null;
+  const confirmed = currentKey !== null && confirmedKey === currentKey;
+  // A dry run submits nothing, so it never needs the confirmation; a real run always does.
+  const canRun = view.state === 'ready' && rows.length > 0 && !batch.running && (dryRun || confirmed);
   const done = batch.statuses.filter((s) => s === 'done' || s === 'filled' || s === 'error').length;
 
   return (
@@ -266,7 +279,34 @@ export function ServiceListAutomation() {
           </div>
 
           <div style={section}>
-            <strong>3. Run</strong>
+            <strong>3. Fixed values (same for every row)</strong>
+            <div style={{ fontSize: 12, opacity: 0.8 }}>
+              Saved automatically and reused next time. Type the text exactly as the dropdown shows it.
+            </div>
+            <FixedValues
+              constants={settings.form.constants}
+              onChange={(c) => update(setPath(settings, 'form.constants', c))}
+              presets={presets}
+              onPresets={setSavedPresets}
+              disabled={batch.running}
+            />
+          </div>
+
+          {parsed && rows.length > 0 && (
+            <div style={section}>
+              <strong>4. Check the columns</strong>
+              <ColumnCheck
+                parsed={parsed}
+                settings={settings}
+                confirmed={confirmed}
+                onConfirm={() => setConfirmedKey(currentKey)}
+                disabled={batch.running}
+              />
+            </div>
+          )}
+
+          <div style={section}>
+            <strong>5. Run</strong>
             <label style={{ ...row, fontSize: 12 }}>
               <Switch
                 checked={dryRun}
@@ -277,7 +317,7 @@ export function ServiceListAutomation() {
             </label>
             <div style={row}>
               <Button onClick={() => void start()} disabled={!canRun}>
-                {dryRun ? 'Start dry run' : 'Start'}
+                {dryRun ? 'Start dry run' : 'Start (real run)'}
               </Button>
               <Button variant="outline" onClick={() => void stop()} disabled={!batch.running}>
                 Stop after current row
@@ -288,6 +328,11 @@ export function ServiceListAutomation() {
                 </span>
               )}
             </div>
+            {rows.length > 0 && !dryRun && !confirmed && !batch.running && (
+              <div style={{ fontSize: 12, opacity: 0.8 }}>
+                Confirm the column check above to enable a real run, or turn on Dry run.
+              </div>
+            )}
             {view.state !== 'ready' && rows.length > 0 && !batch.running && (
               <div style={{ fontSize: 12, opacity: 0.8 }}>Start is available once Chrome shows “Signed in — ready”.</div>
             )}

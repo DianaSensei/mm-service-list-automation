@@ -10,6 +10,8 @@ export interface Settings {
   connection: { port: number; url: string; urlContains: string; chromePath: string };
   csv: {
     skipHeader: boolean;
+    /** Match columns by header name when the file has a header. */
+    autoDetect: boolean;
     /** 0-based column index of each field. */
     columns: Record<ColumnKey, number>;
   };

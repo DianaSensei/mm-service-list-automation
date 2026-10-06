@@ -42,6 +42,12 @@ export const SECTIONS: SectionDef[] = [
     description: 'Which column holds which field. Columns are numbered from 1.',
     fields: [
       { path: 'csv.skipHeader', label: 'First line is a header', kind: 'bool' },
+      {
+        path: 'csv.autoDetect',
+        label: 'Match columns by header name',
+        kind: 'bool',
+        hint: 'With a header row, columns are found by name (e.g. “BU Group code L2”) and the numbers below are only the fallback for a field the header does not name.',
+      },
       col('mid', 'MID'),
       col('serviceCode', 'Service code'),
       col('serviceDescription', 'Service description'),
