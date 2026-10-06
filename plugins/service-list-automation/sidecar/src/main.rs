@@ -36,8 +36,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 use crate::cdp::Cdp;
+use crate::config::OnDuplicate;
 use crate::config::{columns_from, settings_from};
-use crate::form::RowOutcome;
+use crate::form::{Failure, RowOutcome};
 use crate::rows::ServiceRow;
 
 const SERVICE_PROTOCOL: u32 = 1;
@@ -363,6 +364,23 @@ async fn run_batch(id: String, params: Value, tx: Tx) {
     let _ = tx.send(Response::done(id));
 }
 
+#[derive(Default)]
+struct Tally {
+    ok: usize,
+    /// Created, but the page showed no success notice to confirm it.
+    unconfirmed: usize,
+    duplicates: usize,
+    failed: usize,
+    cancelled: bool,
+    aborted: bool,
+}
+
+fn failure_text(f: &Failure) -> &str {
+    match f {
+        Failure::Duplicate(m) | Failure::Rejected(m) | Failure::Error(m) => m,
+    }
+}
+
 async fn run_batch_inner(id: &str, params: Value, tx: &Tx) -> Result<(), String> {
     let p: BatchParams = parse(params)?;
     if p.rows.is_empty() {
@@ -392,72 +410,121 @@ async fn run_batch_inner(id: &str, params: Value, tx: &Tx) -> Result<(), String>
         "type": "started", "runId": run_id, "total": p.rows.len(), "dryRun": behavior.dry_run
     }));
 
-    let (mut ok, mut failed, mut cancelled, mut aborted) = (0usize, 0usize, false, false);
+    let mut tally = Tally::default();
     let mut in_a_row = 0u32;
+    // Service code (trimmed, case-insensitive) → the first row that had it.
+    let mut first_seen: HashMap<String, usize> = HashMap::new();
     for (index, row) in p.rows.iter().enumerate() {
         if cancel.load(Ordering::SeqCst) {
-            cancelled = true;
+            tally.cancelled = true;
             break;
         }
         send(json!({ "type": "row-start", "index": index, "serviceCode": row.service_code }));
-        match form::run_row(&mut cdp, row, &settings).await {
-            Ok(outcome) => {
-                ok += 1;
-                in_a_row = 0;
-                let kind = if outcome == RowOutcome::Filled {
-                    "row-filled"
-                } else {
-                    "row-done"
-                };
-                send(json!({ "type": kind, "index": index }));
-            }
-            Err(e) => {
-                failed += 1;
-                in_a_row += 1;
-                let last_error = e.clone();
-                eprintln!("row {index} failed: {e}");
-                send(json!({ "type": "row-error", "index": index, "error": e }));
-                // The window or Chrome itself was closed: nothing left to drive.
-                if cdp.is_closed() {
-                    aborted = true;
+
+        // A code repeated within the file is a duplicate the tool can know about
+        // without asking the page — and without risking a second record.
+        let key = row.service_code.trim().to_lowercase();
+        if !key.is_empty() {
+            if let Some(&first) = first_seen.get(&key) {
+                if settings.outcome.skip_file_duplicates {
+                    tally.duplicates += 1;
                     send(json!({
-                        "type": "aborted",
-                        "index": index,
-                        "error": "the Chrome window was closed during the run; open it again, sign in if needed, and re-run the remaining rows"
+                        "type": "row-duplicate", "index": index, "source": "file",
+                        "message": format!("same service code as row {} of this file — skipped", first + 1)
                     }));
-                    break;
+                    continue;
                 }
-                // Never fill the next row into a dialog left open by this one.
-                if !form::wait_dialog_closed(&mut cdp, 3_000).await {
-                    aborted = true;
-                    send(json!({
-                        "type": "aborted",
-                        "index": index,
-                        "error": "the form dialog is still open after the failure; close it by hand, then re-run the remaining rows"
-                    }));
-                    break;
-                }
-                // Many failures back to back usually mean the session expired or
-                // the page changed — stop instead of grinding through every row.
-                let limit = behavior.max_consecutive_failures;
-                if limit > 0 && in_a_row >= limit {
-                    aborted = true;
-                    send(json!({
-                        "type": "aborted",
-                        "index": index,
-                        "error": format!(
-                            "{in_a_row} rows failed in a row — the session may have expired or the page changed. Last error: {}",
-                            last_error
-                        )
-                    }));
-                    break;
-                }
+            } else {
+                first_seen.insert(key, index);
             }
         }
+
+        let failure = match form::run_row(&mut cdp, row, &settings).await {
+            Ok(RowOutcome::Filled) => {
+                tally.ok += 1;
+                in_a_row = 0;
+                send(json!({ "type": "row-filled", "index": index }));
+                continue;
+            }
+            Ok(RowOutcome::Created { confirmed, message }) => {
+                tally.ok += 1;
+                if !confirmed {
+                    tally.unconfirmed += 1;
+                }
+                in_a_row = 0;
+                send(
+                    json!({ "type": "row-done", "index": index, "confirmed": confirmed, "message": message }),
+                );
+                continue;
+            }
+            Err(f) => f,
+        };
+
+        eprintln!("row {index}: {failure:?}");
+        let stop_on_duplicate = match &failure {
+            Failure::Duplicate(m) => {
+                tally.duplicates += 1;
+                send(
+                    json!({ "type": "row-duplicate", "index": index, "source": "page", "message": m }),
+                );
+                settings.outcome.on_duplicate == OnDuplicate::Stop
+            }
+            Failure::Rejected(m) => {
+                tally.failed += 1;
+                in_a_row += 1;
+                send(json!({ "type": "row-rejected", "index": index, "message": m }));
+                false
+            }
+            Failure::Error(m) => {
+                tally.failed += 1;
+                in_a_row += 1;
+                send(json!({ "type": "row-error", "index": index, "error": m }));
+                false
+            }
+        };
+
+        let abort = |reason: String| json!({ "type": "aborted", "index": index, "error": reason });
+        // The window or Chrome itself was closed: nothing left to drive.
+        if cdp.is_closed() {
+            tally.aborted = true;
+            send(abort("the Chrome window was closed during the run; open it again, sign in if needed, and re-run the remaining rows".into()));
+            break;
+        }
+        // Never fill the next row into a dialog left open by this one.
+        if !form::wait_dialog_closed(&mut cdp, 3_000).await {
+            tally.aborted = true;
+            send(abort("the form dialog is still open after the failure; close it by hand, then re-run the remaining rows".into()));
+            break;
+        }
+        if stop_on_duplicate {
+            tally.aborted = true;
+            send(abort(format!(
+                "stopped at a duplicate, as set in Settings → Results: {}",
+                failure_text(&failure)
+            )));
+            break;
+        }
+        // Many failures back to back usually mean the session expired or the
+        // page changed — stop instead of grinding through every row.
+        let limit = behavior.max_consecutive_failures;
+        if limit > 0 && in_a_row >= limit {
+            tally.aborted = true;
+            send(abort(format!(
+                "{in_a_row} rows failed in a row — the session may have expired or the page changed. Last error: {}",
+                failure_text(&failure)
+            )));
+            break;
+        }
     }
-    send(
-        json!({ "type": "finished", "ok": ok, "failed": failed, "cancelled": cancelled, "aborted": aborted }),
-    );
+    send(json!({
+        "type": "finished",
+        "ok": tally.ok,
+        "unconfirmed": tally.unconfirmed,
+        "duplicates": tally.duplicates,
+        "failed": tally.failed,
+        "cancelled": tally.cancelled,
+        "aborted": tally.aborted
+    }));
     Ok(())
 }
 

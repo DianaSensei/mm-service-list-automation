@@ -103,7 +103,7 @@ describe('vertical overrides text', () => {
 
 describe('sidecarSettings', () => {
   it('sends only what the sidecar reads', () => {
-    expect(Object.keys(sidecarSettings(DEFAULT_SETTINGS, true)).sort()).toEqual(['behavior', 'form']);
+    expect(Object.keys(sidecarSettings(DEFAULT_SETTINGS, true)).sort()).toEqual(['behavior', 'form', 'outcome']);
   });
 
   it('takes dryRun from the caller, never from saved settings', () => {

@@ -2,6 +2,7 @@
 <button id="B71233594014006408">Create</button>
 <script>
 const subs = [];
+function showAlert(kind,text){const a=document.createElement('div');a.className='t-Alert t-Alert--'+kind;a.textContent=text;document.body.appendChild(a);setTimeout(()=>a.remove(),4000);}
 let swallowUntil = 0;
 const frameHtml = `<!doctype html><body>
 <input id="P7_SERVICE_CODE_input"><input id="P7_SERVICE_DESCRIPTION_input"><input id="P7_MERCHANT_input" maxlength="8">
@@ -10,6 +11,7 @@ ${['P7_BU_GROUP_CODE_L1_ID','P7_BU_GROUP_CODE_L2_ID','P7_BU_GROUP_CODE_L3_ID','P
 <script>
 const $=id=>document.getElementById(id);
 addEventListener('keydown',e=>{if(e.key==='Escape')parent.postMessage({esc:1},'*')});
+addEventListener('message',e=>{if(e.data&&e.data.err){const d=document.createElement('div');d.className='t-Form-error';d.textContent=e.data.err;document.body.appendChild(d);}});
 const fill=(id,opts)=>setTimeout(()=>{const s=$(id);s.innerHTML='<option></option>'+opts.map(o=>'<option>  '+o+'  </option>').join('')},250);
 fill('P7_BU_GROUP_CODE_L1_ID',['SME OFFLINE','OTHER']);
 $('P7_BU_GROUP_CODE_L1_ID').onchange=()=>fill('P7_BU_GROUP_CODE_L2_ID',['L2A','L2B']);
@@ -26,9 +28,18 @@ $('B71221230860006389').onclick=()=>{
   row.push($('P7_CHECK').checked, 'trustedInput='+trustedInput, 'trustedClick='+(trustedClick??'n/a')); parent.postMessage({row},'*');
 };
 <\/script></body>`;
-addEventListener('message',e=>{ if(e.data.esc){ if(location.hash==='#esc'){const f=document.querySelector('iframe');f&&f.remove()} return;} if(!e.data.row)return; subs.push(e.data.row); document.title='submitted:'+JSON.stringify(subs); swallowUntil = Date.now() + 1500;
+addEventListener('message',e=>{ if(e.data.esc){ if(location.hash.includes('esc')){const f=document.querySelector('iframe');f&&f.remove()} return;} if(!e.data.row)return;
+  if(location.hash.includes('outcomes')){
+    const code=e.data.row[0];
+    const closeDialog=()=>setTimeout(()=>{const f=document.querySelector('iframe');f&&f.remove()},200);
+    if(subs.some(r=>r[0]===code)){ e.source.postMessage({err:'Service Code '+code+' already exists.'},'*'); return; }
+    if(code.startsWith('REJ')){ closeDialog(); showAlert('danger','Merchant is not allowed for this category.'); return; }
+    subs.push(e.data.row); document.title='submitted:'+JSON.stringify(subs); closeDialog();
+    if(!code.startsWith('SIL')) showAlert('success','Row created.');
+    return;
+  } subs.push(e.data.row); document.title='submitted:'+JSON.stringify(subs); swallowUntil = Date.now() + 1500;
   setTimeout(()=>document.querySelector('iframe').remove(),200)});
-addEventListener('keydown',e=>{if(e.key==='Escape'&&location.hash==='#esc'){const f=document.querySelector('iframe');f&&f.remove()}});
+addEventListener('keydown',e=>{if(e.key==='Escape'&&location.hash.includes('esc')){const f=document.querySelector('iframe');f&&f.remove()}});
 document.getElementById('B71233594014006408').onclick=()=>{ if(document.querySelector('iframe'))return; if(location.hash.includes('swallow') && Date.now() < swallowUntil) return;
   const f=document.createElement('iframe'); f.srcdoc=frameHtml; f.style.cssText='width:600px;height:400px'; document.body.appendChild(f); };
 if(location.hash.includes('cover')){const c=document.createElement('div');c.style.cssText='position:fixed;inset:0;background:#fff;z-index:9';document.body.appendChild(c);setTimeout(()=>c.remove(),1200)}

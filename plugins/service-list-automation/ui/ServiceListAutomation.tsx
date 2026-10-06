@@ -7,14 +7,13 @@ import { Segmented } from '@/components/ui/segmented';
 import { StatusDot } from '@/components/ui/status-dot';
 import { Switch } from '@/components/ui/switch';
 import { CLOSED_STATUS, createApi, type CsvError, type ParsedCsv, type ServiceRow, type SessionStatus } from './api';
-import { initialBatchState, reduceBatch, type BatchState, type RowStatus } from './batchState';
+import { initialBatchState, reduceBatch, summaryText, type BatchState, type RowStatus } from './batchState';
 import { chromeView, closedBehindOurBack } from './chromeView';
-import { ColumnCheck } from './ColumnCheck';
 import { FixedValues } from './FixedValues';
 import { cleanPresets } from './presets';
 import { SettingsScreen } from './SettingsScreen';
 import { DEFAULT_SETTINGS, setPath, withDefaults, type Settings } from './settings';
-import { checkKey } from './verify';
+import { PreviewDialog } from './PreviewDialog';
 
 const PLUGIN_ID = 'service-list-automation';
 const POLL_MS = 2000;
@@ -22,8 +21,11 @@ const POLL_MS = 2000;
 const STATUS_LABEL: Record<RowStatus, string> = {
   pending: 'Pending',
   running: 'Running',
-  done: 'Done',
+  done: 'Created',
+  unconfirmed: 'Created? (not confirmed)',
   filled: 'Filled (not submitted)',
+  duplicate: 'Duplicate — skipped',
+  rejected: 'Rejected by the page',
   error: 'Failed',
 };
 
@@ -60,7 +62,8 @@ export function ServiceListAutomation() {
   const [notice, setNotice] = useState<string | null>(null);
   const [csvName, setCsvName] = useState<string | null>(null);
   const [parsed, setParsed] = useState<ParsedCsv | null>(null);
-  const [confirmedKey, setConfirmedKey] = useState<string | null>(null);
+  // The preview popup: opened from "Preview data" (just to look) or from Start (to run).
+  const [preview, setPreview] = useState<null | 'look' | 'run'>(null);
   const [rows, setRows] = useState<ServiceRow[]>([]);
   const [csvErrors, setCsvErrors] = useState<CsvError[]>([]);
   const [batch, setBatch] = useState<BatchState>(() => initialBatchState());
@@ -68,8 +71,6 @@ export function ServiceListAutomation() {
   // Dry run is a property of the session, never saved: every time the plugin opens it is on,
   // so a real run is always a decision taken now, not a leftover setting.
   const [dryRun, setDryRun] = useState(true);
-  // A real run needs a second click within a few seconds of the first.
-  const [armed, setArmed] = useState(false);
 
   // Keep the last picked CSV text so changing the header/column settings re-parses it.
   const csvText = useRef<string | null>(null);
@@ -192,28 +193,12 @@ export function ServiceListAutomation() {
     }
   };
 
-  // The confirmation is for exactly this file, mapping and fixed values: any change voids it.
-  const currentKey = parsed ? checkKey(csvName, rows.length, parsed.mapping, settings) : null;
-  const confirmed = currentKey !== null && confirmedKey === currentKey;
-  // A dry run submits nothing, so it never needs the confirmation; a real run always does.
-  const canRun = view.state === 'ready' && rows.length > 0 && !batch.running && (dryRun || confirmed);
-  useEffect(() => {
-    if (!armed) return;
-    const t = setTimeout(() => setArmed(false), 6000);
-    return () => clearTimeout(t);
-  }, [armed]);
-  // Anything that changes what would be submitted disarms.
-  useEffect(() => setArmed(false), [dryRun, currentKey, batch.running]);
+  const canRun = view.state === 'ready' && rows.length > 0 && !batch.running;
 
-  const onStart = () => {
-    if (dryRun || armed) {
-      setArmed(false);
-      void start();
-    } else {
-      setArmed(true);
-    }
-  };
-  const done = batch.statuses.filter((s) => s === 'done' || s === 'filled' || s === 'error').length;
+  // Start always goes through the preview: the run begins from the popup, where the
+  // user sees every row exactly as it will be entered.
+  const onStart = () => setPreview('run');
+  const done = batch.statuses.filter((s) => s !== 'pending' && s !== 'running').length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 24, overflowY: 'auto', height: '100%' }}>
@@ -285,6 +270,11 @@ export function ServiceListAutomation() {
                   {csvName} — {rows.length} row{rows.length === 1 ? '' : 's'}
                 </span>
               )}
+              {parsed && rows.length > 0 && (
+                <Button variant="outline" size="sm" onClick={() => setPreview('look')}>
+                  Preview data…
+                </Button>
+              )}
             </div>
             {csvErrors.length > 0 && (
               <Callout tone="warning">
@@ -312,21 +302,8 @@ export function ServiceListAutomation() {
             />
           </div>
 
-          {parsed && rows.length > 0 && (
-            <div style={section}>
-              <strong>4. Check the columns</strong>
-              <ColumnCheck
-                parsed={parsed}
-                settings={settings}
-                confirmed={confirmed}
-                onConfirm={() => setConfirmedKey(currentKey)}
-                disabled={batch.running}
-              />
-            </div>
-          )}
-
           <div style={section}>
-            <strong>5. Run</strong>
+            <strong>4. Run</strong>
             <label style={{ ...row, fontSize: 12 }}>
               <Switch checked={dryRun} disabled={batch.running} onCheckedChange={setDryRun} />
               Dry run — fill each form but do not submit (on every time this screen opens)
@@ -337,12 +314,8 @@ export function ServiceListAutomation() {
               </Callout>
             )}
             <div style={row}>
-              <Button onClick={onStart} disabled={!canRun} variant={!dryRun && armed ? 'destructive' : 'default'}>
-                {dryRun
-                  ? 'Start dry run'
-                  : armed
-                    ? `Click again to submit ${rows.length} row${rows.length === 1 ? '' : 's'} for real`
-                    : 'Start (real run)'}
+              <Button onClick={onStart} disabled={!canRun} variant={dryRun ? 'default' : 'destructive'}>
+                {dryRun ? 'Start dry run…' : 'Start (real run)…'}
               </Button>
               <Button variant="outline" onClick={() => void stop()} disabled={!batch.running}>
                 Stop after current row
@@ -353,19 +326,13 @@ export function ServiceListAutomation() {
                 </span>
               )}
             </div>
-            {rows.length > 0 && !dryRun && !confirmed && !batch.running && (
-              <div style={{ fontSize: 12, opacity: 0.8 }}>
-                Confirm the column check above to enable a real run, or turn on Dry run.
-              </div>
-            )}
             {view.state !== 'ready' && rows.length > 0 && !batch.running && (
               <div style={{ fontSize: 12, opacity: 0.8 }}>Start is available once Chrome shows “Signed in — ready”.</div>
             )}
             {batch.abortReason && <Callout tone="error">Stopped: {batch.abortReason}</Callout>}
             {batch.summary && !batch.abortReason && (
-              <Callout tone={batch.summary.failed > 0 ? 'warning' : 'success'}>
-                {batch.summary.cancelled ? 'Stopped. ' : 'Finished. '}
-                {batch.summary.ok} {batch.dryRun ? 'filled' : 'done'}, {batch.summary.failed} failed.
+              <Callout tone={batch.summary.failed > 0 || batch.summary.unconfirmed > 0 ? 'warning' : 'success'}>
+                {summaryText(batch.summary, batch.dryRun)}
               </Callout>
             )}
             {rows.length > 0 && (
@@ -376,13 +343,34 @@ export function ServiceListAutomation() {
                     <span style={{ width: 140 }}>{r.serviceCode}</span>
                     <span style={{ flex: 1 }}>{r.merchantName}</span>
                     <span style={{ width: 150 }}>{STATUS_LABEL[batch.statuses[i] ?? 'pending']}</span>
-                    {batch.errors[i] && <span style={{ flexBasis: '100%', opacity: 0.8 }}>{batch.errors[i]}</span>}
+                    {batch.notes[i] && <span style={{ flexBasis: '100%', opacity: 0.8 }}>{batch.notes[i]}</span>}
                   </div>
                 ))}
               </div>
             )}
           </div>
         </>
+      )}
+
+      {preview && parsed && (
+        <PreviewDialog
+          parsed={parsed}
+          fileName={csvName}
+          settings={settings}
+          onClose={() => setPreview(null)}
+          action={
+            preview === 'run' && canRun
+              ? {
+                  real: !dryRun,
+                  label: dryRun ? 'Start dry run' : 'Submit for real',
+                  onRun: () => {
+                    setPreview(null);
+                    void start();
+                  },
+                }
+              : undefined
+          }
+        />
       )}
     </div>
   );

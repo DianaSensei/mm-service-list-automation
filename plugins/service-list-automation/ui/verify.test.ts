@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MappingEntry, ServiceRow } from './api';
 import { DEFAULT_SETTINGS, setPath } from './settings';
-import { buildChecklist, checkKey, verticalFor } from './verify';
+import { buildChecklist, buildPreview, verticalFor } from './verify';
 
 const m = (field: MappingEntry['field'], column: number, header: string | null, detected = true): MappingEntry => ({
   field,
@@ -73,18 +73,22 @@ describe('buildChecklist', () => {
   });
 });
 
-describe('checkKey', () => {
-  const base = checkKey('a.csv', 2, MAPPING, DEFAULT_SETTINGS);
-  it('is stable for the same file and settings', () => {
-    expect(checkKey('a.csv', 2, MAPPING, DEFAULT_SETTINGS)).toBe(base);
+describe('buildPreview', () => {
+  const rows = [row({ serviceCode: 'A1' }), row({ serviceCode: ' a1 ', l3: 'GROCERY' }), row({ serviceCode: 'B2' }), row({ serviceCode: '' }), row({ serviceCode: '' })];
+  const p = buildPreview(rows, DEFAULT_SETTINGS);
+
+  it('shows every row with the values it will enter, fixed ones included', () => {
+    expect(p).toHaveLength(5);
+    expect(p[0].values).toMatchObject({ 'Service Code': 'A1', L1: 'SME OFFLINE', L2: 'FNB', L5: 'OTHER', 'Group Code L1': 'PAYMENT', 'New vertical': 'BEVERAGE' });
+    expect(p[1].values['New vertical']).toBe('GROCERY - OTHER');
   });
-  it('changes with the file, the mapping, or what the form is filled with', () => {
-    expect(checkKey('b.csv', 2, MAPPING, DEFAULT_SETTINGS)).not.toBe(base);
-    expect(checkKey('a.csv', 3, MAPPING, DEFAULT_SETTINGS)).not.toBe(base);
-    expect(checkKey('a.csv', 2, [...MAPPING.slice(1), m('mid', 2, 'MID')], DEFAULT_SETTINGS)).not.toBe(base);
-    expect(checkKey('a.csv', 2, MAPPING, setPath(DEFAULT_SETTINGS, 'form.constants.l1', 'X'))).not.toBe(base);
+
+  it('flags a code already used earlier in the file, like the run will', () => {
+    expect(p.map((x) => x.duplicateOf)).toEqual([undefined, 1, undefined, undefined, undefined]);
+    expect(buildPreview(rows, DEFAULT_SETTINGS, false).every((x) => x.duplicateOf === undefined)).toBe(true);
   });
-  it('ignores settings that do not change what is entered', () => {
-    expect(checkKey('a.csv', 2, MAPPING, setPath(DEFAULT_SETTINGS, 'behavior.timeoutMs', 1))).toBe(base);
+
+  it('reflects the fixed values currently set', () => {
+    expect(buildPreview(rows, setPath(DEFAULT_SETTINGS, 'form.constants.project', 'P2'))[0].values['Special project']).toBe('P2');
   });
 });

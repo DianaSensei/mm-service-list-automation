@@ -111,6 +111,27 @@ export const SECTIONS: SectionDef[] = [
     ],
   },
   {
+    id: 'outcome',
+    title: 'Results',
+    description: 'How the tool tells a created row from a duplicate or a rejection, by reading what the page shows after Create.',
+    fields: [
+      {
+        path: 'outcome.onDuplicate',
+        label: 'When a row is a duplicate',
+        kind: 'choice',
+        options: [
+          { value: 'skip', label: 'Skip it and continue' },
+          { value: 'stop', label: 'Stop the run' },
+        ],
+      },
+      { path: 'outcome.skipFileDuplicates', label: 'Skip a service code repeated in the file', kind: 'bool', hint: 'Only its first row is submitted; the page is never asked about the repeats.' },
+      { path: 'outcome.duplicatePattern', label: 'A message means “duplicate” if it matches', kind: 'text', hint: 'Regular expression, case-insensitive, tested against the page’s error message.' },
+      { path: 'outcome.confirmWaitMs', label: 'Look for the success message for (ms)', kind: 'number', min: 0, hint: 'After the dialog closes. Without a success message the row is marked “not confirmed”.' },
+      { path: 'outcome.successSelectors', label: 'Success message (CSS selectors)', kind: 'text' },
+      { path: 'outcome.errorSelectors', label: 'Error message (CSS selectors)', kind: 'text' },
+    ],
+  },
+  {
     id: 'ids',
     title: 'Page element IDs',
     description: 'APEX-generated ids. Change them only if the page changes.',

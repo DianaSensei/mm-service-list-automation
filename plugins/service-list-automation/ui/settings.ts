@@ -35,6 +35,14 @@ export interface Settings {
     dialogOpenWaitMs: number;
     createAttempts: number;
   };
+  outcome: {
+    successSelectors: string;
+    errorSelectors: string;
+    duplicatePattern: string;
+    onDuplicate: 'skip' | 'stop';
+    skipFileDuplicates: boolean;
+    confirmWaitMs: number;
+  };
 }
 
 export type ColumnKey = 'mid' | 'serviceCode' | 'serviceDescription' | 'merchantName' | 'l2' | 'l3' | 'l4' | 'l6';
@@ -116,5 +124,5 @@ export function parseOverrides(text: string): Record<string, string> {
 /** `dryRun` is always passed in by the caller, never read from saved settings, so an
  *  old saved value can never turn into a real run. */
 export function sidecarSettings(s: Settings, dryRun: boolean) {
-  return { form: s.form, behavior: { ...s.behavior, dryRun } };
+  return { form: s.form, behavior: { ...s.behavior, dryRun }, outcome: s.outcome };
 }

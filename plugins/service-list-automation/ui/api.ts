@@ -54,11 +54,25 @@ export interface LaunchResult {
 export type BatchEvent =
   | { type: 'started'; runId: string; total: number; dryRun: boolean }
   | { type: 'row-start'; index: number; serviceCode: string }
-  | { type: 'row-done'; index: number }
+  /** Submitted and the dialog closed; `confirmed` = the page showed a success notice. */
+  | { type: 'row-done'; index: number; confirmed?: boolean; message?: string | null }
   | { type: 'row-filled'; index: number }
+  /** Already exists: repeated earlier in the file (`file`) or reported by the page (`page`). */
+  | { type: 'row-duplicate'; index: number; source: 'file' | 'page'; message: string }
+  /** The page showed an error or validation message for this row. */
+  | { type: 'row-rejected'; index: number; message: string }
+  /** The tool could not complete the row (timeout, missing element…). */
   | { type: 'row-error'; index: number; error: string }
   | { type: 'aborted'; index: number; error: string }
-  | { type: 'finished'; ok: number; failed: number; cancelled: boolean; aborted: boolean };
+  | {
+      type: 'finished';
+      ok: number;
+      unconfirmed?: number;
+      duplicates?: number;
+      failed: number;
+      cancelled: boolean;
+      aborted: boolean;
+    };
 
 export const CLOSED_STATUS: SessionStatus = { reachable: false, ready: false, page: null, pageCount: 0 };
 

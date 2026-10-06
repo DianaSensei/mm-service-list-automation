@@ -7,7 +7,7 @@
 //   node e2e/drive.mjs target/debug/devtool-svc-service-list-automation \
 //        "$PWD/e2e/chrome-headless.sh" [scenario ...]
 //
-// Scenarios: trusted script dry fail window cover retry noretry safe   (default: all)
+// Scenarios: trusted script dry fail window cover retry noretry settle safe outcomes   (default: all)
 // Each scenario launches its own headless Chrome (fresh profile) and closes it
 // through the sidecar's own `close-chrome`.
 import { spawn } from 'node:child_process';
@@ -118,14 +118,14 @@ const scenarios = {
   },
   async retry() {
     await withChrome('#esc,swallow', async (sc) => {
-      const ev = await run(sc, [GOOD(1), GOOD(2), GOOD(3)], { behavior: { ...fast.behavior, afterSubmitSettleMs: 0, dialogOpenWaitMs: 700 } });
+      const ev = await run(sc, [GOOD(1), GOOD(2), GOOD(3)], { behavior: { ...fast.behavior, afterSubmitSettleMs: 0, dialogOpenWaitMs: 700 }, outcome: { confirmWaitMs: 0 } });
       check(ev.at(-1).ok === 3 && ev.at(-1).failed === 0, `a lost "create" click is repeated: all 3 rows submitted (${types(ev)})`);
       check((await submissions()).length === 3, 'exactly 3 submissions (no duplicate dialogs)');
     });
   },
   async noretry() {
     await withChrome('#esc,swallow', async (sc) => {
-      const ev = await run(sc, [GOOD(1), GOOD(2)], { behavior: { ...fast.behavior, afterSubmitSettleMs: 0, createAttempts: 1, timeoutMs: 1200 } });
+      const ev = await run(sc, [GOOD(1), GOOD(2)], { behavior: { ...fast.behavior, afterSubmitSettleMs: 0, createAttempts: 1, timeoutMs: 1200 }, outcome: { confirmWaitMs: 0 } });
       const err = ev.find((e) => e.type === 'row-error');
       check(!!err && /timed out waiting for the form dialog/.test(err.error), 'without retry the failure of the real run is reproduced');
       check(/readyState=complete/.test(err?.error ?? '') && /iframes=0/.test(err?.error ?? ''), `the error carries the page state: ${err?.error?.slice(-90)}`);
@@ -133,8 +133,36 @@ const scenarios = {
   },
   async settle() {
     await withChrome('#esc,swallow', async (sc) => {
-      const ev = await run(sc, [GOOD(1), GOOD(2)], { behavior: { ...fast.behavior, afterSubmitSettleMs: 1800, createAttempts: 1 } });
+      const ev = await run(sc, [GOOD(1), GOOD(2)], { behavior: { ...fast.behavior, afterSubmitSettleMs: 1800, createAttempts: 1 }, outcome: { confirmWaitMs: 0 } });
       check(ev.at(-1).ok === 2, `a long enough pause after submit avoids the lost click on its own (${types(ev)})`);
+    });
+  },
+  async outcomes() {
+    await withChrome('#esc,outcomes', async (sc) => {
+      const row = (code) => `M-${code},${code},Desc ${code},Shop ${code},cat,L2A,FASHION,L4A,L6A`;
+      const ev = await run(sc, [row('A1'), row('a1 '), row('REJ1'), row('SIL1'), row('B1')], fast);
+      const at = (i) => ev.filter((e) => e.index === i && e.type !== 'row-start')[0] ?? {};
+      check(at(0).type === 'row-done' && at(0).confirmed === true && at(0).message === 'Row created.', `created + confirmed by the page's success notice (${JSON.stringify(at(0))})`);
+      check(at(1).type === 'row-duplicate' && at(1).source === 'file', `same code again in the file (case/space-insensitive) is skipped without touching the page (${at(1).message})`);
+      check(at(2).type === 'row-rejected' && /not allowed/.test(at(2).message), `a rejection shown after the dialog closed is reported with its text (${at(2).message})`);
+      check(at(3).type === 'row-done' && at(3).confirmed === false, 'closed without any notice → created but NOT confirmed (the stale alerts of earlier rows are ignored)');
+      check(at(4).type === 'row-done' && at(4).confirmed === true, 'the next row is confirmed again');
+      const fin = ev.find((e) => e.type === 'finished');
+      check(fin.ok === 3 && fin.unconfirmed === 1 && fin.duplicates === 1 && fin.failed === 1, `summary counts ${JSON.stringify(fin)}`);
+      check((await submissions()).length === 3, 'the page recorded exactly 3 creations');
+
+      // Already in the system (created by an earlier batch): the page says so inside the dialog.
+      const ev2 = await run(sc, [row('A1'), row('C1')], fast);
+      const dup = ev2.find((e) => e.type === 'row-duplicate');
+      check(dup?.source === 'page' && /already exists/.test(dup.message), `duplicate reported by the page (${dup?.message})`);
+      check(ev2.find((e) => e.type === 'row-done' && e.index === 1), 'skip mode: the run carries on after a duplicate');
+
+      const ev3 = await run(sc, [row('A1'), row('D1')], { behavior: fast.behavior, outcome: { onDuplicate: 'stop' } });
+      check(ev3.some((e) => e.type === 'aborted' && /duplicate/.test(e.error)) && !ev3.some((e) => e.type === 'row-start' && e.index === 1), 'stop mode: the run stops at the duplicate');
+
+      const ev4 = await run(sc, [row('E1'), row('E1')], { behavior: fast.behavior, outcome: { skipFileDuplicates: false } });
+      check(ev4.some((e) => e.type === 'row-duplicate' && e.source === 'page'), 'with the in-file check off, the page catches the repeat');
+      check((await submissions()).filter((r) => r[0] === 'E1').length === 1, '…and still only one record exists');
     });
   },
   async safe() {

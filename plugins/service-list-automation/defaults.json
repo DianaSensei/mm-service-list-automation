@@ -59,5 +59,13 @@
     "afterSubmitSettleMs": 800,
     "dialogOpenWaitMs": 4000,
     "createAttempts": 3
+  },
+  "outcome": {
+    "successSelectors": ".t-Alert--success, #t_Alert_Success",
+    "errorSelectors": ".t-Alert--danger, .t-Alert--warning, #t_Alert_Notification, .t-Form-error, .a-Form-error, .apex-page-item-error",
+    "duplicatePattern": "duplicate|already exist|exists|unique|trùng|đã tồn tại|đã có",
+    "onDuplicate": "skip",
+    "skipFileDuplicates": true,
+    "confirmWaitMs": 3000
   }
 }

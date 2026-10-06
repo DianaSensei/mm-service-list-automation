@@ -87,15 +87,57 @@ export function buildChecklist(mapping: MappingEntry[], header: string[], rows: 
   return { items, unused };
 }
 
-/** Changes whenever anything the user was asked to verify changes, so an old
- *  confirmation never covers a different file or mapping. */
-export function checkKey(fileName: string | null, rowCount: number, mapping: MappingEntry[], s: Settings): string {
-  return JSON.stringify([
-    fileName,
-    rowCount,
-    mapping.map((m) => [m.field, m.column, m.detected]),
-    s.form.constants,
-    s.form.verticalOverrides,
-    s.csv.skipHeader,
-  ]);
+/** One row exactly as it will be entered, field by field, for the preview popup. */
+export interface PreviewRow {
+  /** 1-based row number in the file's data rows. */
+  n: number;
+  values: Record<PreviewColumn, string>;
+  /** Earlier row (1-based) with the same service code: this one will be skipped. */
+  duplicateOf?: number;
+}
+
+export const PREVIEW_COLUMNS = [
+  'Service Code',
+  'Service Description',
+  'Merchant',
+  'L1',
+  'L2',
+  'L3',
+  'L4',
+  'L5',
+  'L6',
+  'Group Code L1',
+  'New vertical',
+  'Special project',
+] as const;
+export type PreviewColumn = (typeof PREVIEW_COLUMNS)[number];
+
+/** What each row will put in the form. `skipFileDuplicates` mirrors the sidecar:
+ *  a code seen earlier in the file (trimmed, ignoring case) is not submitted again. */
+export function buildPreview(rows: ServiceRow[], s: Settings, skipFileDuplicates = true): PreviewRow[] {
+  const c = s.form.constants;
+  const firstSeen = new Map<string, number>();
+  return rows.map((r, i) => {
+    const key = r.serviceCode.trim().toLowerCase();
+    const earlier = key ? firstSeen.get(key) : undefined;
+    if (key && earlier === undefined) firstSeen.set(key, i + 1);
+    return {
+      n: i + 1,
+      duplicateOf: skipFileDuplicates ? earlier : undefined,
+      values: {
+        'Service Code': r.serviceCode,
+        'Service Description': r.serviceDescription,
+        Merchant: r.merchantName,
+        L1: c.l1,
+        L2: r.l2,
+        L3: r.l3,
+        L4: r.l4,
+        L5: c.l5,
+        L6: r.l6,
+        'Group Code L1': c.groupCodeL1,
+        'New vertical': verticalFor(r.l3, s.form.verticalOverrides),
+        'Special project': c.project,
+      },
+    };
+  });
 }

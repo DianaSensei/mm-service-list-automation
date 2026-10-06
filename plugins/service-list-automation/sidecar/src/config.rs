@@ -210,10 +210,41 @@ pub struct Behavior {
     pub dry_run_hold_ms: u64,
 }
 
+/// What to do when a row turns out to be a duplicate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OnDuplicate {
+    /// Record it, leave it alone, carry on with the next row.
+    Skip,
+    /// Stop the whole batch.
+    Stop,
+}
+
+/// How the result of a submit is read back from the page. The tool never sees the
+/// server's answer directly, only what the page shows, so this is configurable
+/// markup (APEX Universal Theme by default) plus a text pattern for "duplicate".
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Outcome {
+    /// CSS selectors of a success notice (comma separated).
+    pub success_selectors: String,
+    /// CSS selectors of an error / validation notice (comma separated).
+    pub error_selectors: String,
+    /// Case-insensitive regular expression: an error notice matching it means "duplicate".
+    pub duplicate_pattern: String,
+    pub on_duplicate: OnDuplicate,
+    /// Skip a row whose service code already appeared earlier in the same file,
+    /// without touching the page.
+    pub skip_file_duplicates: bool,
+    /// After the dialog closes, how long to look for a success or error notice.
+    pub confirm_wait_ms: u64,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct RunSettings {
     pub form: FormConfig,
     pub behavior: Behavior,
+    pub outcome: Outcome,
 }
 default_from!(RunSettings,);
 
@@ -263,6 +294,20 @@ mod tests {
         assert_eq!(s.behavior.input_mode, InputMode::Script);
         assert_eq!(s.behavior.option_match, OptionMatch::Contains);
         assert_eq!(s.behavior.close_timeout_ms, 10_000);
+    }
+
+    #[test]
+    fn outcome_defaults_look_for_apex_notices_and_skip_duplicates() {
+        let o = RunSettings::default().outcome;
+        assert!(o.success_selectors.contains(".t-Alert--success"));
+        assert!(o.error_selectors.contains(".t-Alert--danger"));
+        assert_eq!(o.on_duplicate, OnDuplicate::Skip);
+        assert!(o.skip_file_duplicates);
+        let stop = settings_from(json!({ "outcome": { "onDuplicate": "stop" } }))
+            .unwrap()
+            .outcome;
+        assert_eq!(stop.on_duplicate, OnDuplicate::Stop);
+        assert_eq!(stop.confirm_wait_ms, 3000);
     }
 
     #[test]

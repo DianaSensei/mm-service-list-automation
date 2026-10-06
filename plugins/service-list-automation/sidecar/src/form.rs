@@ -265,9 +265,154 @@ pub async fn is_ready(cdp: &mut Cdp, s: &RunSettings) -> Result<bool, String> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum RowOutcome {
-    Submitted,
+    /// Submitted and the dialog closed. `confirmed`: the page showed a success
+    /// notice for it; otherwise nothing contradicted it but nothing confirmed it.
+    Created {
+        confirmed: bool,
+        message: Option<String>,
+    },
     /// Dry run: everything was filled, nothing submitted.
     Filled,
+}
+
+/// Why a row did not end up created.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Failure {
+    /// The page said the record already exists (matched `outcome.duplicatePattern`).
+    Duplicate(String),
+    /// The page showed an error or validation message for this submit.
+    Rejected(String),
+    /// The tool itself could not complete the row (timeouts, missing elements…).
+    Error(String),
+}
+
+impl From<String> for Failure {
+    fn from(e: String) -> Self {
+        Failure::Error(e)
+    }
+}
+
+/// Every document a notice can be in: the page, and the dialog if it is open.
+const DOCS: &str = "const docs = [document]; const fd = frameDoc(); if (fd) docs.push(fd);";
+
+/// Tag every notice already on screen, so a success banner left from the previous
+/// row is never taken as the answer to this one.
+async fn mark_existing_notices(cdp: &mut Cdp, s: &RunSettings) -> Result<(), String> {
+    let sels = format!(
+        "{}, {}",
+        s.outcome.success_selectors, s.outcome.error_selectors
+    );
+    let body = format!(
+        "{DOCS} for (const d of docs) {{ try {{ d.querySelectorAll({}).forEach((el) => el.setAttribute('data-slp-seen', '1')); }} catch (e) {{}} }} return true;",
+        js(&sels)
+    );
+    cdp.eval(&expr(&body)).await.map(|_| ())
+}
+
+/// New (untagged), visible, non-empty notices matching `selectors`, each with
+/// whether it reads like a duplicate.
+fn notices_body(selectors: &str, duplicate_pattern: &str) -> String {
+    format!(
+        "{DOCS} \
+         const re = (() => {{ try {{ return new RegExp({pat}, 'i'); }} catch (e) {{ return null; }} }})(); \
+         const isDup = (t) => re ? re.test(t) : t.toLowerCase().includes({pat}.toLowerCase()); \
+         const out = []; \
+         for (const d of docs) {{ let found = []; try {{ found = [...d.querySelectorAll({sels})]; }} catch (e) {{}} \
+           for (const el of found) {{ \
+             if (el.hasAttribute('data-slp-seen')) continue; \
+             const st = d.defaultView.getComputedStyle(el); \
+             if (st.display === 'none' || st.visibility === 'hidden' || el.getClientRects().length === 0) continue; \
+             const text = norm(el.textContent || ''); if (!text) continue; \
+             if (out.some((o) => o.text.includes(text) || text.includes(o.text))) continue; \
+             out.push({{ text: text.slice(0, 300), duplicate: isDup(text) }}); }} }} \
+         return out;",
+        pat = js(duplicate_pattern),
+        sels = js(selectors)
+    )
+}
+
+async fn new_notices(
+    cdp: &mut Cdp,
+    selectors: &str,
+    s: &RunSettings,
+) -> Result<Vec<(String, bool)>, String> {
+    let v = cdp
+        .eval(&expr(&notices_body(
+            selectors,
+            &s.outcome.duplicate_pattern,
+        )))
+        .await?;
+    Ok(v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|n| {
+                    Some((
+                        n.get("text")?.as_str()?.to_string(),
+                        n.get("duplicate")?.as_bool()?,
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// Error notices → the matching failure (duplicate wins if any notice says so).
+fn failure_from(errors: Vec<(String, bool)>) -> Failure {
+    let text = errors
+        .iter()
+        .map(|(t, _)| t.as_str())
+        .collect::<Vec<_>>()
+        .join(" | ");
+    if errors.iter().any(|(_, dup)| *dup) {
+        Failure::Duplicate(text)
+    } else {
+        Failure::Rejected(text)
+    }
+}
+
+/// After clicking submit: watch for an error notice (in the dialog or on the
+/// page) and for the dialog to close; then, with the dialog gone, look for the
+/// page's success or error notice.
+async fn await_submit_result(cdp: &mut Cdp, s: &RunSettings) -> Result<RowOutcome, Failure> {
+    let start = Instant::now();
+    loop {
+        let errors = new_notices(cdp, &s.outcome.error_selectors, s).await?;
+        if !errors.is_empty() {
+            return Err(failure_from(errors));
+        }
+        if dialog_closed(cdp).await {
+            break;
+        }
+        if start.elapsed() >= Duration::from_millis(s.behavior.close_timeout_ms) {
+            return Err(Failure::Error(format!(
+                "dialog did not close after submit and showed no message the tool recognises ({})",
+                page_snapshot(cdp, s).await
+            )));
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+
+    let start = Instant::now();
+    loop {
+        let errors = new_notices(cdp, &s.outcome.error_selectors, s).await?;
+        if !errors.is_empty() {
+            return Err(failure_from(errors));
+        }
+        let ok = new_notices(cdp, &s.outcome.success_selectors, s).await?;
+        if let Some((text, _)) = ok.into_iter().next() {
+            return Ok(RowOutcome::Created {
+                confirmed: true,
+                message: Some(text),
+            });
+        }
+        if start.elapsed() >= Duration::from_millis(s.outcome.confirm_wait_ms) {
+            return Ok(RowOutcome::Created {
+                confirmed: false,
+                message: None,
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
 }
 
 /// A one-line description of the page's state, attached to errors so a failure
@@ -345,7 +490,7 @@ async fn fill_and_submit(
     cdp: &mut Cdp,
     row: &ServiceRow,
     s: &RunSettings,
-) -> Result<RowOutcome, String> {
+) -> Result<RowOutcome, Failure> {
     let (i, c) = (&s.form.ids, &s.form.constants);
     let t = s.behavior.timeout_ms;
 
@@ -388,18 +533,20 @@ async fn fill_and_submit(
         return if wait_dialog_closed(cdp, s.behavior.close_timeout_ms).await {
             Ok(RowOutcome::Filled)
         } else {
-            Err("dry run: the dialog did not close on Escape".to_string())
+            Err(Failure::Error(
+                "dry run: the dialog did not close on Escape".to_string(),
+            ))
         };
     }
 
+    mark_existing_notices(cdp, s).await?;
     click(cdp, Doc::Frame, &i.submit, s).await?;
-    if wait_dialog_closed(cdp, s.behavior.close_timeout_ms).await {
+    let result = await_submit_result(cdp, s).await;
+    if result.is_ok() {
         // The page refreshes after a submit; let it finish before the next row.
         tokio::time::sleep(Duration::from_millis(s.behavior.after_submit_settle_ms)).await;
-        Ok(RowOutcome::Submitted)
-    } else {
-        Err("dialog did not close after submit (the form may have rejected the row)".to_string())
     }
+    result
 }
 
 /// Fill (and, unless dry-running, submit) one row. On any failure the dialog may
@@ -408,7 +555,7 @@ pub async fn run_row(
     cdp: &mut Cdp,
     row: &ServiceRow,
     s: &RunSettings,
-) -> Result<RowOutcome, String> {
+) -> Result<RowOutcome, Failure> {
     let result = fill_and_submit(cdp, row, s).await;
     if result.is_err() {
         let _ = cdp.press_escape().await;
@@ -446,6 +593,29 @@ mod tests {
         for truthy in [json!(true), json!(1), json!("x"), json!({"x": 1})] {
             assert!(is_truthy(&truthy), "{truthy}");
         }
+    }
+
+    #[test]
+    fn a_duplicate_notice_wins_over_other_errors() {
+        let f = failure_from(vec![
+            ("Merchant is required".into(), false),
+            ("Service code already exists".into(), true),
+        ]);
+        assert!(
+            matches!(f, Failure::Duplicate(ref m) if m.contains("already exists") && m.contains("required"))
+        );
+        assert!(matches!(
+            failure_from(vec![("Invalid".into(), false)]),
+            Failure::Rejected(_)
+        ));
+    }
+
+    #[test]
+    fn notice_scan_embeds_selectors_and_pattern_as_json_and_skips_tagged_ones() {
+        let b = notices_body(".a, #b\"x", "dup|trùng");
+        assert!(b.contains(r#"".a, #b\"x""#), "{b}");
+        assert!(b.contains(r#""dup|trùng""#));
+        assert!(b.contains("data-slp-seen"));
     }
 
     #[test]
