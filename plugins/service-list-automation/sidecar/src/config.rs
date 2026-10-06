@@ -195,8 +195,17 @@ pub struct Behavior {
     pub option_match: OptionMatch,
     /// Stop the batch after this many failed rows in a row (0 = never).
     pub max_consecutive_failures: u32,
-    /// Fill every field but do not submit.
+    /// Fill every field but do not submit. Defaults to true: a request that does
+    /// not say otherwise never writes anything.
     pub dry_run: bool,
+    /// Pause after each successful submit, so the page can finish refreshing
+    /// before the next "create" click.
+    pub after_submit_settle_ms: u64,
+    /// How long one "create" click may go without any dialog appearing before it
+    /// is judged lost and clicked again.
+    pub dialog_open_wait_ms: u64,
+    /// Total "create" clicks to try per row (1 = no retry).
+    pub create_attempts: u32,
     /// In a dry run, how long the filled dialog stays visible before it is closed.
     pub dry_run_hold_ms: u64,
 }
@@ -254,7 +263,24 @@ mod tests {
         assert_eq!(s.behavior.input_mode, InputMode::Script);
         assert_eq!(s.behavior.option_match, OptionMatch::Contains);
         assert_eq!(s.behavior.close_timeout_ms, 10_000);
-        assert!(!s.behavior.dry_run);
+    }
+
+    #[test]
+    fn a_request_that_does_not_mention_dry_run_is_a_dry_run() {
+        // The safe default: nothing is submitted unless a caller says so, explicitly.
+        assert!(settings_from(Value::Null).unwrap().behavior.dry_run);
+        assert!(
+            settings_from(json!({ "behavior": { "timeoutMs": 5 } }))
+                .unwrap()
+                .behavior
+                .dry_run
+        );
+        assert!(
+            !settings_from(json!({ "behavior": { "dryRun": false } }))
+                .unwrap()
+                .behavior
+                .dry_run
+        );
     }
 
     #[test]

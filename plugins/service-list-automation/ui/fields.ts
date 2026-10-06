@@ -104,8 +104,10 @@ export const SECTIONS: SectionDef[] = [
       { path: 'behavior.closeTimeoutMs', label: 'Dialog close timeout (ms)', kind: 'number', min: 100, hint: 'How long to wait for the dialog to close after submit.' },
       { path: 'behavior.readyTimeoutMs', label: 'Page ready timeout (ms)', kind: 'number', min: 100, hint: 'How long to wait at the start for the page to finish loading.' },
       { path: 'behavior.maxConsecutiveFailures', label: 'Stop after failed rows in a row', kind: 'number', min: 0, hint: '0 = never stop on failures.' },
-      { path: 'behavior.dryRun', label: 'Dry run', kind: 'bool', hint: 'Fill every field but do not submit.' },
-      { path: 'behavior.dryRunHoldMs', label: 'Dry run: show filled form for (ms)', kind: 'number', min: 0 },
+      { path: 'behavior.dryRunHoldMs', label: 'Dry run: show filled form for (ms)', kind: 'number', min: 0, hint: 'The dry-run switch itself is on the Run screen and is on every time the plugin opens.' },
+      { path: 'behavior.afterSubmitSettleMs', label: 'Pause after each submit (ms)', kind: 'number', min: 0, hint: 'Lets the page finish refreshing before the next row.' },
+      { path: 'behavior.dialogOpenWaitMs', label: 'Wait for the dialog before clicking Create again (ms)', kind: 'number', min: 100 },
+      { path: 'behavior.createAttempts', label: 'Create clicks to try per row', kind: 'number', min: 1, max: 10, hint: '1 = never click again. A click can be lost while the page refreshes.' },
     ],
   },
   {

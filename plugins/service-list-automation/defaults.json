@@ -54,7 +54,10 @@
     "inputMode": "trusted",
     "optionMatch": "exact",
     "maxConsecutiveFailures": 3,
-    "dryRun": false,
-    "dryRunHoldMs": 1500
+    "dryRun": true,
+    "dryRunHoldMs": 1500,
+    "afterSubmitSettleMs": 800,
+    "dialogOpenWaitMs": 4000,
+    "createAttempts": 3
   }
 }

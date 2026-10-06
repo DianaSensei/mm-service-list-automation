@@ -27,8 +27,13 @@ export interface Settings {
     inputMode: InputMode;
     optionMatch: OptionMatch;
     maxConsecutiveFailures: number;
+    /** Not a saved preference: the Run screen starts every session as a dry run and
+     *  passes the choice with each run (see `sidecarSettings`). */
     dryRun: boolean;
     dryRunHoldMs: number;
+    afterSubmitSettleMs: number;
+    dialogOpenWaitMs: number;
+    createAttempts: number;
   };
 }
 
@@ -108,6 +113,8 @@ export function parseOverrides(text: string): Record<string, string> {
 
 // ── what the sidecar receives ─────────────────────────────────────────────────
 
-export function sidecarSettings(s: Settings) {
-  return { form: s.form, behavior: s.behavior };
+/** `dryRun` is always passed in by the caller, never read from saved settings, so an
+ *  old saved value can never turn into a real run. */
+export function sidecarSettings(s: Settings, dryRun: boolean) {
+  return { form: s.form, behavior: { ...s.behavior, dryRun } };
 }

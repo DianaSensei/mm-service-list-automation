@@ -7,7 +7,7 @@
 //   node e2e/drive.mjs target/debug/devtool-svc-service-list-automation \
 //        "$PWD/e2e/chrome-headless.sh" [scenario ...]
 //
-// Scenarios: trusted script dry fail window cover   (default: all)
+// Scenarios: trusted script dry fail window cover retry noretry safe   (default: all)
 // Each scenario launches its own headless Chrome (fresh profile) and closes it
 // through the sidecar's own `close-chrome`.
 import { spawn } from 'node:child_process';
@@ -42,7 +42,9 @@ function sidecar() {
 const csv = (rows) => ['MID,SERVICE_CODE,SERVICE_DESCRIPTION,MERCHANT,CATEGORY,BU Group code L2,BU Group code L3,BU Group code L4,BU Group code L6', ...rows].join('\n');
 const GOOD = (n, merch = 'Shop') => `M${n},SC${n},Desc ${n},${merch},cat,L2A,FASHION,L4A,L6A`;
 const BAD = (n) => `M${n},SC${n},Bad ${n},Shop,cat,L2A,NOPE,L4A,L6A`;
-const fast = { behavior: { timeoutMs: 2500, closeTimeoutMs: 2000 } };
+// Real submits against the FAKE page: dryRun has to be switched off explicitly, because the
+// sidecar's own default is a dry run.
+const fast = { behavior: { timeoutMs: 2500, closeTimeoutMs: 2000, dryRun: false } };
 
 const tabs = async () => (await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()).filter((t) => t.type === 'page');
 const submissions = async () => {
@@ -112,6 +114,36 @@ const scenarios = {
       const t0 = Date.now();
       const ev = await run(sc, [GOOD(1)]);
       check(ev.at(-1).ok === 1, `row submitted once the overlay lifted (${Date.now() - t0}ms)`);
+    });
+  },
+  async retry() {
+    await withChrome('#esc,swallow', async (sc) => {
+      const ev = await run(sc, [GOOD(1), GOOD(2), GOOD(3)], { behavior: { ...fast.behavior, afterSubmitSettleMs: 0, dialogOpenWaitMs: 700 } });
+      check(ev.at(-1).ok === 3 && ev.at(-1).failed === 0, `a lost "create" click is repeated: all 3 rows submitted (${types(ev)})`);
+      check((await submissions()).length === 3, 'exactly 3 submissions (no duplicate dialogs)');
+    });
+  },
+  async noretry() {
+    await withChrome('#esc,swallow', async (sc) => {
+      const ev = await run(sc, [GOOD(1), GOOD(2)], { behavior: { ...fast.behavior, afterSubmitSettleMs: 0, createAttempts: 1, timeoutMs: 1200 } });
+      const err = ev.find((e) => e.type === 'row-error');
+      check(!!err && /timed out waiting for the form dialog/.test(err.error), 'without retry the failure of the real run is reproduced');
+      check(/readyState=complete/.test(err?.error ?? '') && /iframes=0/.test(err?.error ?? ''), `the error carries the page state: ${err?.error?.slice(-90)}`);
+    });
+  },
+  async settle() {
+    await withChrome('#esc,swallow', async (sc) => {
+      const ev = await run(sc, [GOOD(1), GOOD(2)], { behavior: { ...fast.behavior, afterSubmitSettleMs: 1800, createAttempts: 1 } });
+      check(ev.at(-1).ok === 2, `a long enough pause after submit avoids the lost click on its own (${types(ev)})`);
+    });
+  },
+  async safe() {
+    await withChrome('#esc', async (sc) => {
+      const p = await sc.call('parse-csv', { text: csv([GOOD(1)]), skipHeader: true });
+      // No settings at all: this must NOT submit.
+      const ev = await sc.call('run-batch', { rows: p.rows, port: PORT, urlContains: 'fake-apex' });
+      check(ev[0].dryRun === true, 'a request with no settings is a dry run');
+      check((await submissions()).length === 0, 'nothing was submitted');
     });
   },
   async window() {

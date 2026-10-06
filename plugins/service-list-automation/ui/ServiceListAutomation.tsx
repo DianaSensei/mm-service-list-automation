@@ -65,6 +65,11 @@ export function ServiceListAutomation() {
   const [csvErrors, setCsvErrors] = useState<CsvError[]>([]);
   const [batch, setBatch] = useState<BatchState>(() => initialBatchState());
   const [error, setError] = useState<string | null>(null);
+  // Dry run is a property of the session, never saved: every time the plugin opens it is on,
+  // so a real run is always a decision taken now, not a leftover setting.
+  const [dryRun, setDryRun] = useState(true);
+  // A real run needs a second click within a few seconds of the first.
+  const [armed, setArmed] = useState(false);
 
   // Keep the last picked CSV text so changing the header/column settings re-parses it.
   const csvText = useRef<string | null>(null);
@@ -172,7 +177,7 @@ export function ServiceListAutomation() {
     setBatch(initialBatchState(rows.length));
     try {
       // The promise from `stream` resolves once subscribed; events drive state.
-      await api.runBatch(settings, rows, (e) => setBatch((s) => reduceBatch(s, e)));
+      await api.runBatch(settings, rows, (e) => setBatch((s) => reduceBatch(s, e)), dryRun);
     } catch (e) {
       setError(errMsg(e));
     }
@@ -187,12 +192,27 @@ export function ServiceListAutomation() {
     }
   };
 
-  const dryRun = settings.behavior.dryRun;
   // The confirmation is for exactly this file, mapping and fixed values: any change voids it.
   const currentKey = parsed ? checkKey(csvName, rows.length, parsed.mapping, settings) : null;
   const confirmed = currentKey !== null && confirmedKey === currentKey;
   // A dry run submits nothing, so it never needs the confirmation; a real run always does.
   const canRun = view.state === 'ready' && rows.length > 0 && !batch.running && (dryRun || confirmed);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 6000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  // Anything that changes what would be submitted disarms.
+  useEffect(() => setArmed(false), [dryRun, currentKey, batch.running]);
+
+  const onStart = () => {
+    if (dryRun || armed) {
+      setArmed(false);
+      void start();
+    } else {
+      setArmed(true);
+    }
+  };
   const done = batch.statuses.filter((s) => s === 'done' || s === 'filled' || s === 'error').length;
 
   return (
@@ -308,16 +328,21 @@ export function ServiceListAutomation() {
           <div style={section}>
             <strong>5. Run</strong>
             <label style={{ ...row, fontSize: 12 }}>
-              <Switch
-                checked={dryRun}
-                disabled={batch.running}
-                onCheckedChange={(v) => update(setPath(settings, 'behavior.dryRun', v))}
-              />
-              Dry run — fill each form but do not submit
+              <Switch checked={dryRun} disabled={batch.running} onCheckedChange={setDryRun} />
+              Dry run — fill each form but do not submit (on every time this screen opens)
             </label>
+            {!dryRun && rows.length > 0 && (
+              <Callout tone="warning">
+                Dry run is off. Start will really create {rows.length} service code{rows.length === 1 ? '' : 's'} in the system.
+              </Callout>
+            )}
             <div style={row}>
-              <Button onClick={() => void start()} disabled={!canRun}>
-                {dryRun ? 'Start dry run' : 'Start (real run)'}
+              <Button onClick={onStart} disabled={!canRun} variant={!dryRun && armed ? 'destructive' : 'default'}>
+                {dryRun
+                  ? 'Start dry run'
+                  : armed
+                    ? `Click again to submit ${rows.length} row${rows.length === 1 ? '' : 's'} for real`
+                    : 'Start (real run)'}
               </Button>
               <Button variant="outline" onClick={() => void stop()} disabled={!batch.running}>
                 Stop after current row

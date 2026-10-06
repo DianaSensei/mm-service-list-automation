@@ -2,6 +2,7 @@
 <button id="B71233594014006408">Create</button>
 <script>
 const subs = [];
+let swallowUntil = 0;
 const frameHtml = `<!doctype html><body>
 <input id="P7_SERVICE_CODE_input"><input id="P7_SERVICE_DESCRIPTION_input"><input id="P7_MERCHANT_input" maxlength="8">
 ${['P7_BU_GROUP_CODE_L1_ID','P7_BU_GROUP_CODE_L2_ID','P7_BU_GROUP_CODE_L3_ID','P7_BU_GROUP_CODE_L4_ID','P7_BU_GROUP_CODE_L5_ID','P7_BU_GROUP_CODE_L6_ID','P7_GROUP_CODE_L1_ID','P7_NEWVERTICAL_ID','P7_SPECIALPROJECT_ID'].map(i=>`<select id="${i}"><option></option></select>`).join('')}
@@ -25,10 +26,10 @@ $('B71221230860006389').onclick=()=>{
   row.push($('P7_CHECK').checked, 'trustedInput='+trustedInput, 'trustedClick='+(trustedClick??'n/a')); parent.postMessage({row},'*');
 };
 <\/script></body>`;
-addEventListener('message',e=>{ if(e.data.esc){ if(location.hash==='#esc'){const f=document.querySelector('iframe');f&&f.remove()} return;} if(!e.data.row)return; subs.push(e.data.row); document.title='submitted:'+JSON.stringify(subs);
+addEventListener('message',e=>{ if(e.data.esc){ if(location.hash==='#esc'){const f=document.querySelector('iframe');f&&f.remove()} return;} if(!e.data.row)return; subs.push(e.data.row); document.title='submitted:'+JSON.stringify(subs); swallowUntil = Date.now() + 1500;
   setTimeout(()=>document.querySelector('iframe').remove(),200)});
 addEventListener('keydown',e=>{if(e.key==='Escape'&&location.hash==='#esc'){const f=document.querySelector('iframe');f&&f.remove()}});
-document.getElementById('B71233594014006408').onclick=()=>{ if(document.querySelector('iframe'))return;
+document.getElementById('B71233594014006408').onclick=()=>{ if(document.querySelector('iframe'))return; if(location.hash.includes('swallow') && Date.now() < swallowUntil) return;
   const f=document.createElement('iframe'); f.srcdoc=frameHtml; f.style.cssText='width:600px;height:400px'; document.body.appendChild(f); };
 if(location.hash.includes('cover')){const c=document.createElement('div');c.style.cssText='position:fixed;inset:0;background:#fff;z-index:9';document.body.appendChild(c);setTimeout(()=>c.remove(),1200)}
 </script></body></html>

@@ -76,7 +76,7 @@ export function createApi(sdk: PluginSdk) {
       sdk.service.call<SessionStatus>('session-status', {
         port: s.connection.port,
         urlContains: s.connection.urlContains,
-        settings: sidecarSettings(s),
+        settings: sidecarSettings(s, true), // only reads the page; never submits
       }),
     parseCsv: (text: string, s: Settings) =>
       sdk.service.call<ParsedCsv>('parse-csv', {
@@ -85,12 +85,12 @@ export function createApi(sdk: PluginSdk) {
         autoDetect: s.csv.autoDetect,
         columns: s.csv.columns,
       }),
-    runBatch: (s: Settings, rows: ServiceRow[], onEvent: (e: BatchEvent) => void) =>
+    runBatch: (s: Settings, rows: ServiceRow[], onEvent: (e: BatchEvent) => void, dryRun: boolean) =>
       sdk.service.stream<BatchEvent>('run-batch', onEvent, {
         rows,
         port: s.connection.port,
         urlContains: s.connection.urlContains,
-        settings: sidecarSettings(s),
+        settings: sidecarSettings(s, dryRun),
       }),
     cancelBatch: (runId: string) => sdk.service.call<{ cancelled: boolean }>('cancel-batch', { runId }),
   };

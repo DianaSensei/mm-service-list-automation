@@ -28,12 +28,12 @@ describe('defaults.json', () => {
     expect(DEFAULT_SETTINGS.csv.columns).toMatchObject({ serviceCode: 1, l2: 5, l3: 6, l4: 7, l6: 8 });
     expect(DEFAULT_SETTINGS.csv.autoDetect).toBe(true);
     expect(DEFAULT_SETTINGS.behavior.inputMode).toBe('trusted');
-    expect(DEFAULT_SETTINGS.behavior.dryRun).toBe(false);
+    expect(DEFAULT_SETTINGS.behavior.dryRun).toBe(true);
   });
 
   it('every setting is editable somewhere on the settings screen', () => {
-    // `connection.url` is the one field edited on the Run tab instead.
-    const edited = new Set([...FIELD_PATHS, 'connection.url']);
+    // Edited on the Run screen instead: the URL, and the dry-run switch (never a saved preference).
+    const edited = new Set([...FIELD_PATHS, 'connection.url', 'behavior.dryRun']);
     const missing = leaves(DEFAULT_SETTINGS).filter((p) => !edited.has(p));
     expect(missing).toEqual([]);
   });
@@ -103,6 +103,18 @@ describe('vertical overrides text', () => {
 
 describe('sidecarSettings', () => {
   it('sends only what the sidecar reads', () => {
-    expect(Object.keys(sidecarSettings(DEFAULT_SETTINGS)).sort()).toEqual(['behavior', 'form']);
+    expect(Object.keys(sidecarSettings(DEFAULT_SETTINGS, true)).sort()).toEqual(['behavior', 'form']);
+  });
+
+  it('takes dryRun from the caller, never from saved settings', () => {
+    // An old saved state that says dryRun:false must not turn into a real run.
+    const saved = withDefaults({ behavior: { dryRun: false } });
+    expect(saved.behavior.dryRun).toBe(false);
+    expect(sidecarSettings(saved, true).behavior.dryRun).toBe(true);
+    expect(sidecarSettings(saved, false).behavior.dryRun).toBe(false);
+  });
+
+  it('a fresh install defaults to a dry run', () => {
+    expect(DEFAULT_SETTINGS.behavior.dryRun).toBe(true);
   });
 });

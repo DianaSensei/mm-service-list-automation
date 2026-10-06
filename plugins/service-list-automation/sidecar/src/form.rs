@@ -270,6 +270,77 @@ pub enum RowOutcome {
     Filled,
 }
 
+/// A one-line description of the page's state, attached to errors so a failure
+/// can be diagnosed without having been watching the screen.
+async fn page_snapshot(cdp: &mut Cdp, s: &RunSettings) -> String {
+    let body = format!(
+        "const f = [...document.querySelectorAll('iframe')]; \
+         return `readyState=${{document.readyState}}, create button ${{visible({}) ? 'visible' : 'not visible'}}, \
+         iframes=${{f.length}} (${{f.filter(visible).length}} visible)`;",
+        el_expr(Doc::Top, &s.form.ids.create)
+    );
+    match cdp.eval(&expr(&body)).await {
+        Ok(Value::String(v)) => v,
+        _ => "page state unavailable".to_string(),
+    }
+}
+
+/// Click "create" until the form dialog really opens.
+///
+/// A click can be lost — right after a submit APEX refreshes the page, and a click
+/// during that refresh does nothing. A click that produced no dialog at all is
+/// therefore repeated. A dialog that is merely slow (its iframe is already there)
+/// is NOT clicked again, which would open a second one.
+async fn open_dialog(cdp: &mut Cdp, s: &RunSettings) -> Result<(), String> {
+    let t = s.behavior.timeout_ms;
+    let marker = format!(
+        "return !!{};",
+        el_expr(Doc::Frame, &s.form.ids.service_code)
+    );
+    let attempts = s.behavior.create_attempts.max(1);
+    for attempt in 1..=attempts {
+        click(cdp, Doc::Top, &s.form.ids.create, s).await?;
+        let last = attempt == attempts;
+        let first_wait = if last {
+            t
+        } else {
+            s.behavior.dialog_open_wait_ms.min(t)
+        };
+        if wait_until(cdp, &marker, "the form dialog", first_wait)
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+        let loading = matches!(
+            cdp.eval(&expr(
+                "return [...document.querySelectorAll('iframe')].some(visible);"
+            ))
+            .await,
+            Ok(Value::Bool(true))
+        );
+        if loading {
+            // The dialog is coming, just slowly: give it the whole step timeout.
+            return match wait_until(cdp, &marker, "the form dialog", t).await {
+                Ok(_) => Ok(()),
+                Err(e) => Err(format!("{e} ({})", page_snapshot(cdp, s).await)),
+            };
+        }
+        if last {
+            let tries = if attempts > 1 {
+                format!(" after {attempts} clicks")
+            } else {
+                String::new()
+            };
+            return Err(format!(
+                "timed out waiting for the form dialog{tries} ({})",
+                page_snapshot(cdp, s).await
+            ));
+        }
+    }
+    unreachable!("the loop returns on its last attempt")
+}
+
 async fn fill_and_submit(
     cdp: &mut Cdp,
     row: &ServiceRow,
@@ -278,9 +349,7 @@ async fn fill_and_submit(
     let (i, c) = (&s.form.ids, &s.form.constants);
     let t = s.behavior.timeout_ms;
 
-    click(cdp, Doc::Top, &i.create, s).await?;
-    let marker = format!("return !!{};", el_expr(Doc::Frame, &i.service_code));
-    wait_until(cdp, &marker, "the form dialog", t).await?;
+    open_dialog(cdp, s).await?;
 
     type_text(cdp, &i.service_code, &row.service_code, s).await?;
     type_text(cdp, &i.service_description, &row.service_description, s).await?;
@@ -325,6 +394,8 @@ async fn fill_and_submit(
 
     click(cdp, Doc::Frame, &i.submit, s).await?;
     if wait_dialog_closed(cdp, s.behavior.close_timeout_ms).await {
+        // The page refreshes after a submit; let it finish before the next row.
+        tokio::time::sleep(Duration::from_millis(s.behavior.after_submit_settle_ms)).await;
         Ok(RowOutcome::Submitted)
     } else {
         Err("dialog did not close after submit (the form may have rejected the row)".to_string())
