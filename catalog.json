@@ -1,5 +1,31 @@
 {
-  "version": "0.0.0",
-  "generatedAt": "2026-10-05T15:17:06.000Z",
-  "plugins": []
+  "version": "0.1.0",
+  "generatedAt": "2026-10-06T18:43:42.333Z",
+  "plugins": [
+    {
+      "id": "service-list-automation",
+      "label": "Service List",
+      "description": "Fill the merchant service-list form from a CSV, driving a Chrome session you log in to yourself.",
+      "icon": "list-checks",
+      "keywords": [
+        "service list",
+        "merchant",
+        "csv",
+        "automation",
+        "chrome",
+        "form",
+        "bulk",
+        "import",
+        "apex"
+      ],
+      "version": "0.1.0",
+      "pluginManifestUrl": "https://github.com/DianaSensei/mm-service-list-automation/releases/download/service-list-automation-v0.1.0/service-list-automation-plugin.manifest.json",
+      "serviceManifestUrl": "https://github.com/DianaSensei/mm-service-list-automation/releases/download/service-list-automation-v0.1.0/service-list-automation-service.manifest.json",
+      "targets": [
+        "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+        "x86_64-unknown-linux-gnu"
+      ]
+    }
+  ]
 }
