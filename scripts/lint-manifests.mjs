@@ -38,29 +38,33 @@ for (const id of readdirSync(PLUGINS_DIR)) {
     for (const field of ['sdk', 'label', 'description', 'icon', 'route', 'permissions']) {
       if (pluginManifest[field] === undefined) fail(`${id}: manifest.plugin.json missing "${field}"`);
     }
-    if (!KEBAB.test(id)) fail(`${id}: folder name is not kebab-case`);
+    if (!pluginManifest.route?.startsWith('/')) fail(`${id}: manifest.plugin.json route must be absolute`);
+    const hasServicePerm = pluginManifest.permissions?.includes('service') ?? false;
+    const hasServiceField = pluginManifest.service !== undefined;
+    if (hasServicePerm !== hasServiceField) {
+      fail(`${id}: manifest.plugin.json "service" permission and "service" field must both be present or both absent (validateManifest() on the app side rejects a mismatch)`);
+    }
+    if (hasServiceField) {
+      if (!KEBAB.test(pluginManifest.service.bin)) fail(`${id}: service.bin "${pluginManifest.service.bin}" must be kebab-case`);
+      if (!Array.isArray(pluginManifest.service.methods) || pluginManifest.service.methods.length === 0) {
+        fail(`${id}: service.methods must be a non-empty array`);
+      }
+    }
+    const hasNativePerm = pluginManifest.permissions?.includes('native') ?? false;
+    const hasCommands = (pluginManifest.commands?.length ?? 0) > 0;
+    if (hasNativePerm !== hasCommands) {
+      fail(`${id}: "native" permission and a non-empty "commands" list must both be present or both absent`);
+    }
   }
 
-  const servicePath = join(dir, 'manifest.service.json');
-  try {
-    readFileSync(servicePath);
-  } catch {
-    continue; // Tier-A-only plugin, no sidecar — nothing more to check
-  }
-  const serviceManifest = readJson(servicePath);
+  const serviceManifest = readJson(join(dir, 'manifest.service.json'));
   if (serviceManifest) {
     if (serviceManifest.kind !== 'service') fail(`${id}: manifest.service.json kind must be "service"`);
-    if (!serviceManifest.bin) fail(`${id}: manifest.service.json missing "bin"`);
-    const cargoToml = readFileSync(join(dir, 'sidecar', 'Cargo.toml'), 'utf-8');
-    const binNameMatch = cargoToml.match(/\[\[bin\]\][^[]*name\s*=\s*"([^"]+)"/);
-    if (binNameMatch && binNameMatch[1] !== serviceManifest.bin) {
-      fail(`${id}: manifest.service.json's bin "${serviceManifest.bin}" != Cargo.toml's [[bin]] name "${binNameMatch[1]}"`);
+    if (!KEBAB.test(serviceManifest.bin)) fail(`${id}: manifest.service.json bin "${serviceManifest.bin}" must be kebab-case`);
+    if (pluginManifest?.service && pluginManifest.service.bin !== serviceManifest.bin) {
+      fail(`${id}: manifest.plugin.json service.bin "${pluginManifest.service.bin}" != manifest.service.json bin "${serviceManifest.bin}"`);
     }
-    if (pluginManifest && !Array.isArray(pluginManifest.service?.methods)) {
-      fail(`${id}: manifest.plugin.json's service.methods must be an array`);
-    } else if (pluginManifest && pluginManifest.service.methods.length === 0) {
-      fail(`${id}: manifest.plugin.json's service.methods is empty`);
-    }
+    if (typeof serviceManifest.protocol !== 'number') fail(`${id}: manifest.service.json protocol must be a number`);
   }
 }
 

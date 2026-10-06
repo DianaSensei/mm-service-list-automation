@@ -1,17 +1,17 @@
 name: Release service-list-automation
 
-# This branch (app/service-list-automation/main) releases ONLY the service-list-automation plugin — forked
-# from the devtool-plugins skeleton (main); see that branch's README.md
-# for why plugins live on their own branches instead of one monorepo tree
-# (fault isolation + independent versioning per plugin).
+# This branch (app/service-list-automation/main) releases ONLY the service-list-automation plugin
+# — forked from the devtool-plugins skeleton (main); see that branch's
+# README.md for why plugins live on their own branches instead of one
+# monorepo tree (fault isolation + independent versioning per plugin).
 #
-# Tag push (service-list-automation-v*) builds the plugin bundle (kind="plugin") and its sidecar
-# binary (kind="service") for the target triples below, computes SHA-256
-# for each artifact, fills the manifest templates with real URLs/integrity,
-# and publishes everything as assets on a GitHub Release — then merges
-# just this plugin's entry into the aggregated catalog.json living on
-# `main` (see the `publish` job's last steps), never touching any other
-# plugin's entry there.
+# Tag push (service-list-automation-v*) builds the plugin bundle (kind="plugin") and
+# its sidecar binary (kind="service") for the target triples below,
+# computes SHA-256 for each artifact, fills the manifest templates with
+# real URLs/integrity, and publishes everything as assets on a GitHub
+# Release — then merges just this plugin's entry into the aggregated
+# catalog.json living on `main` (see the `publish` job's last steps), never
+# touching any other plugin's entry there.
 #
 # Also runnable manually (workflow_dispatch) for environments that can drive
 # the GitHub Actions API but can't push a tag ref (e.g. a scoped CI bot
@@ -56,7 +56,7 @@ jobs:
         run: npm run build
 
       - name: Upload bundle artifacts for the sidecar job to attach manifests to
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: plugin-bundles
           path: |
@@ -88,6 +88,11 @@ jobs:
           workspaces: |
             plugins/service-list-automation/sidecar -> target
 
+      # Discovers sidecars dynamically (any plugins/*/sidecar with a
+      # Cargo.toml) so adding a new plugin here never requires touching this
+      # workflow — the bin name comes from `[[bin]] name` in each crate's own
+      # Cargo.toml, which is also what `manifest.service.json`'s `bin` field
+      # must match (checked by `npm run lint:manifests`).
       - name: Build every sidecar
         shell: bash
         run: |
@@ -96,6 +101,26 @@ jobs:
             [ -f "$dir/Cargo.toml" ] || continue
             echo "== $dir =="
             (cd "$dir" && cargo build --release --target ${{ matrix.rust-target }})
+          done
+
+      # ci.yml already runs `cargo test` on every push, but only in debug
+      # mode on ubuntu — a tag push here can come from a commit whose CI run
+      # is stale, was skipped, or (workflow_dispatch) an arbitrary ref that
+      # never went through ci.yml at all. Re-running tests here, on the
+      # ACTUAL release build for all three platforms, is what makes this
+      # workflow self-sufficient: a release never publishes a binary this
+      # job hasn't itself verified. `--release --target` matches the binary
+      # `Build every sidecar` just produced above (not a redundant debug
+      # rebuild) — each matrix leg already runs on its own native target, so
+      # this is a normal same-arch test run, never cross-arch emulation.
+      - name: Run sidecar unit tests (non-#[ignore]'d only — no live broker/daemon in CI)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for dir in plugins/*/sidecar; do
+            [ -f "$dir/Cargo.toml" ] || continue
+            echo "== $dir =="
+            (cd "$dir" && cargo test --release --target ${{ matrix.rust-target }})
           done
 
       - name: Collect binaries (rename with target triple, add .exe on Windows)
@@ -112,7 +137,7 @@ jobs:
                "out/${bin}-${{ matrix.rust-target }}${EXT}"
           done
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sidecars-${{ matrix.rust-target }}
           path: out/*
@@ -125,13 +150,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v6.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: 'plugin-bundles'
           path: downloaded/bundles
           merge-multiple: true
 
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v6.0.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: 'sidecars-*'
           path: downloaded/sidecars
@@ -146,28 +171,53 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           TAG: ${{ env.RELEASE_TAG }}
 
-      # --draft: everything past this point can still fail, and a draft is
-      # invisible to anything reading the release — so a failure here leaves
-      # an unfinished DRAFT, not a broken live release.
+      # --draft: the "Commit catalog.json" step below can still fail (e.g. a
+      # concurrent push to the default branch racing this one), and a draft
+      # is invisible to anything reading the release — developer-desktop-utils'
+      # Settings → Extensions install-from-manifest-URL flow and starlight-site's
+      # catalog.json fetch both alike. Without --draft, a failure there leaves
+      # a live release whose commited catalog.json never landed (same failure
+      # class release.yml's own build-then-tag redesign in developer-desktop-utils
+      # exists to prevent one level up, at the tag/release boundary — this is
+      # the same fix applied to this job's own remaining internal step).
       - name: Publish GitHub Release (draft)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # Same "-beta.N" convention build-release.mjs checks (isBeta) — a
+          # beta tag's release is marked prerelease so it never satisfies
+          # `/releases/latest`, which GitHub resolves to the newest
+          # non-prerelease, non-draft release only.
+          PRERELEASE_FLAGS=()
+          if [[ "${RELEASE_TAG}" =~ -beta\.[0-9]+$ ]]; then
+            PRERELEASE_FLAGS+=(--prerelease)
+          fi
           gh release create "${RELEASE_TAG}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${RELEASE_TAG}" \
             --notes "Automated build of the ${PLUGIN_ID} plugin/sidecar." \
             --target "${{ github.sha }}" \
             --draft \
+            "${PRERELEASE_FLAGS[@]}" \
             release-assets/*
 
+      # Release assets are served from a storage host that never sends
+      # Access-Control-Allow-Origin, so a browser fetch() of catalog.json
+      # (starlight-site's /plugins page) fails CORS silently — the page's
+      # error handler then leaves every button in its disabled "loading"
+      # state forever. raw.githubusercontent.com does send that header, so
       # catalog.json lives as a committed file on `main` (the skeleton
-      # branch), not a release asset (release-asset storage doesn't send
-      # CORS headers, which starlight-site's fetch needs). This branch only
-      # builds/releases ONE plugin, so release-assets/catalog.json above has
-      # exactly one entry — merge it into main's copy instead of overwriting,
-      # so every other plugin's entry survives untouched.
+      # branch), not a release asset.
+      #
+      # This branch only builds/releases ONE plugin — release-assets/catalog.json
+      # from build-release.mjs above therefore has exactly one entry (this
+      # plugin's). Overwriting main's catalog.json with that would wipe out
+      # every other plugin's entry, so this merges instead: fetch main's
+      # current catalog.json, replace only this plugin's entry in it, and
+      # push that as a new commit ON TOP OF main's tip — not on top of this
+      # branch's history, since `git switch` below re-points the working
+      # tree at main before committing.
       - name: Merge this plugin's entry into main's catalog.json and commit
         run: |
           set -euo pipefail
@@ -184,8 +234,11 @@ jobs:
           git commit -m "catalog: update ${PLUGIN_ID} to ${RELEASE_TAG}"
           git push origin HEAD:main
 
-      # The point of no return: everything above succeeded, so this is the
-      # first point the release becomes visible to anything reading it.
+      # The point of no return: everything above succeeded (no
+      # continue-on-error anywhere in this job), so this is the first point
+      # the release becomes visible to anything reading it. If the job stops
+      # before this step, what's left behind is a draft, not a broken live
+      # release with a stale/missing catalog.json.
       - name: Publish the release (flip draft -> published)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

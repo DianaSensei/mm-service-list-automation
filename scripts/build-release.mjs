@@ -11,8 +11,28 @@ import path from 'node:path';
 
 const repo = process.env.GITHUB_REPOSITORY;
 const tag = process.env.TAG;
-const version = tag.replace(/^v/, '');
-if (!repo || !tag) throw new Error('GITHUB_REPOSITORY and TAG env vars are required');
+const pluginId = process.env.PLUGIN_ID;
+if (!repo || !tag || !pluginId) throw new Error('GITHUB_REPOSITORY, TAG, and PLUGIN_ID env vars are required');
+
+// Tags are "<PLUGIN_ID>-vX.Y.Z" (each plugin branch releases independently —
+// see main's README.md), not the old shared repo-wide "vX.Y.Z". Confirmed
+// the hard way: service-list-automation-v1.0.0's first live release under the new
+// per-plugin scheme left `tag.replace(/^v/, '')` untouched (the tag doesn't
+// START with "v"), stamping the literal string "service-list-automation-v1.0.0" into
+// both the manifest and catalog.json's "version" field instead of "1.0.0".
+const versionPrefix = `${pluginId}-v`;
+if (!tag.startsWith(versionPrefix)) {
+  throw new Error(`Expected tag "${tag}" to start with "${versionPrefix}"`);
+}
+const version = tag.slice(versionPrefix.length);
+
+// A tag like "service-list-automation-v1.3.0-beta.1" — the "-beta.N" suffix survives
+// `tag.slice(versionPrefix.length)` above untouched, so `version` here is
+// already the full semver-with-prerelease string. This ONLY decides which
+// SHAPE the catalog entry below gets (nested under `beta`, or the normal
+// root fields) — merge-catalog-entry.mjs is what actually keeps a beta
+// release from clobbering the existing stable entry (or vice versa).
+const isBeta = /-beta\.\d+$/.test(version);
 
 const releaseUrl = (asset) => `https://github.com/${repo}/releases/download/${tag}/${asset}`;
 const sha256 = (filePath) => createHash('sha256').update(readFileSync(filePath)).digest('hex');
@@ -83,17 +103,18 @@ for (const { id, bin } of PLUGINS) {
     targets = Object.keys(serviceManifest.targets);
   }
 
-  catalog.plugins.push({
-    id,
-    label: pluginManifest.label,
-    description: pluginManifest.description,
-    icon: pluginManifest.icon,
-    keywords: pluginManifest.keywords,
-    version,
-    pluginManifestUrl: releaseUrl(pluginManifestAsset),
-    serviceManifestUrl,
-    targets,
-  });
+  const variant = { version, pluginManifestUrl: releaseUrl(pluginManifestAsset), serviceManifestUrl, targets };
+  const meta = { id, label: pluginManifest.label, description: pluginManifest.description, icon: pluginManifest.icon, keywords: pluginManifest.keywords };
+
+  // A beta release's catalog entry carries ONLY `beta` — no root-level
+  // version/pluginManifestUrl/etc. It's intentionally incomplete on its
+  // own (developer-desktop-utils's `toMarketPlugin` requires root fields
+  // to accept an entry at all): merge-catalog-entry.mjs is the step that
+  // grafts this onto the plugin's EXISTING stable entry, never publishes
+  // it standalone. A plugin's first-ever release therefore can't be a
+  // beta — merge-catalog-entry.mjs enforces that with a clear error
+  // instead of silently producing a catalog entry the host would drop.
+  catalog.plugins.push(isBeta ? { ...meta, beta: variant } : { ...meta, ...variant });
 }
 
 writeFileSync('release-assets/catalog.json', JSON.stringify(catalog, null, 2));

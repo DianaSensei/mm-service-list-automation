@@ -2,7 +2,8 @@ name: CI
 
 # Fast feedback on every push/PR — catches a broken plugin bundle or sidecar
 # before anyone pushes a release tag. release.yml (tag push) does the real
-# cross-platform sidecar build/publish; this just proves things build and pass on Linux, quickly.
+# cross-platform sidecar build/publish; this just proves things build and
+# pass on Linux, quickly.
 on:
   push:
     branches: ['**']
