@@ -5,34 +5,32 @@ import { Callout } from '@/components/ui/callout';
 import { Input } from '@/components/ui/input';
 import { Segmented } from '@/components/ui/segmented';
 import { StatusDot } from '@/components/ui/status-dot';
-import { Switch } from '@/components/ui/switch';
 import { CLOSED_STATUS, createApi, type CsvError, type ParsedCsv, type ServiceRow, type SessionStatus } from './api';
-import { initialBatchState, reduceBatch, summaryText, type BatchState, type RowStatus } from './batchState';
+import { initialBatchState, reduceBatch, type BatchState } from './batchState';
 import { chromeView, closedBehindOurBack } from './chromeView';
 import { FixedValues } from './FixedValues';
 import { cleanPresets } from './presets';
-import { SettingsScreen } from './SettingsScreen';
+import { SettingsScreen, type ProfileInfo } from './SettingsScreen';
 import { DEFAULT_SETTINGS, setPath, withDefaults, type Settings } from './settings';
 import { PreviewDialog } from './PreviewDialog';
+import { RunResults } from './ResultsTable';
 import { cleanPageUrl, cleanRecent, rememberUrl } from './urls';
 
 const PLUGIN_ID = 'service-list-automation';
 const POLL_MS = 2000;
 
-const STATUS_LABEL: Record<RowStatus, string> = {
-  pending: 'Pending',
-  running: 'Running',
-  done: 'Created',
-  unconfirmed: 'Created? (not confirmed)',
-  filled: 'Filled (not submitted)',
-  duplicate: 'Duplicate — skipped',
-  rejected: 'Rejected by the page',
-  error: 'Failed',
-};
 
-const section = { display: 'flex', flexDirection: 'column', gap: 8 } as const;
 const row = { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' } as const;
-const label = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 } as const;
+const selectStyle = {
+  height: 32,
+  padding: '0 6px',
+  borderRadius: 6,
+  background: 'transparent',
+  color: 'inherit',
+  border: '1px solid var(--line, rgba(128,128,128,0.4))',
+  fontSize: 12,
+  maxWidth: 260,
+} as const;
 
 type Tab = 'run' | 'settings';
 
@@ -74,6 +72,7 @@ export function ServiceListAutomation() {
   // Dry run is a property of the session, never saved: every time the plugin opens it is on,
   // so a real run is always a decision taken now, not a leftover setting.
   const [dryRun, setDryRun] = useState(true);
+  const [profile, setProfile] = useState<ProfileInfo | null>(null);
 
   // Keep the last picked CSV text so changing the header/column settings re-parses it.
   const csvText = useRef<string | null>(null);
@@ -117,6 +116,12 @@ export function ServiceListAutomation() {
   }, [refresh]);
 
   const view = chromeView(session);
+
+  // Look the profile folder up when Settings is shown (it can be created meanwhile).
+  useEffect(() => {
+    if (tab !== 'settings') return;
+    api.profileInfo().then(setProfile, () => setProfile(null));
+  }, [api, tab, session?.reachable]);
 
   const parse = useCallback(
     async (text: string, s: Settings) => {
@@ -204,15 +209,18 @@ export function ServiceListAutomation() {
   };
 
   const canRun = view.state === 'ready' && rows.length > 0 && !batch.running;
+  // Why Start is not available, in one short line (nothing when it is).
+  const blocker =
+    rows.length === 0 ? 'Choose a CSV file first.' : view.state !== 'ready' ? 'Waiting for Chrome: sign in and open the service list page.' : null;
 
   // Start always goes through the preview: the run begins from the popup, where the
   // user sees every row exactly as it will be entered.
   const onStart = () => setPreview('run');
-  const done = batch.statuses.filter((s) => s !== 'pending' && s !== 'running').length;
+  const started = batch.running || batch.summary !== null;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 24, overflowY: 'auto', height: '100%' }}>
-      <div style={row}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '20px 24px', overflowY: 'auto', height: '100%' }}>
+      <div style={{ ...row, marginBottom: 12 }}>
         <Segmented<Tab>
           value={tab}
           onValueChange={setTab}
@@ -225,104 +233,84 @@ export function ServiceListAutomation() {
 
       {error && <Callout tone="error">{error}</Callout>}
 
-      {tab === 'settings' && <SettingsScreen settings={settings} onChange={update} />}
+      {tab === 'settings' && <SettingsScreen settings={settings} onChange={update} profile={profile} />}
 
       {tab === 'run' && (
         <>
-          <div style={section}>
-            <strong>1. Chrome</strong>
-            <div style={{ fontSize: 12, opacity: 0.8 }}>
-              Opens a separate Chrome with its own profile. Sign in there yourself (SSO / MFA included); your everyday
-              Chrome is never touched. Close it here or by hand — this screen follows either.
-            </div>
-            <label style={{ ...label, maxWidth: 560 }}>
-              Service list page URL
+          <Section title="Chrome">
+            <div style={row}>
               <Input
+                style={{ flex: 1, minWidth: 260 }}
                 value={settings.connection.url}
-                placeholder="https://…"
+                placeholder="Service list page URL — remembered from the page you last used"
                 onChange={(e) => update(setPath(settings, 'connection.url', e.target.value))}
               />
-              <span style={{ opacity: 0.7 }}>
-                Saved automatically from the page you last worked on; “Open Chrome” goes back to it.
-              </span>
-            </label>
-            {recentUrls.length > 1 && (
-              <label style={{ ...row, fontSize: 12 }}>
-                Recent pages
+              {recentUrls.length > 1 && (
                 <select
-                  style={{ height: 30, padding: '0 6px', borderRadius: 6, background: 'transparent', color: 'inherit', border: '1px solid currentColor', maxWidth: 480 }}
+                  style={selectStyle}
                   value=""
+                  title="Recent pages"
                   onChange={(e) => e.target.value && update(setPath(settings, 'connection.url', e.target.value))}
                 >
-                  <option value="">Choose…</option>
+                  <option value="">Recent…</option>
                   {recentUrls.map((u) => (
                     <option key={u} value={u}>
                       {u}
                     </option>
                   ))}
                 </select>
-              </label>
-            )}
+              )}
+            </div>
             <div style={row}>
               <Button onClick={() => void openChrome()} disabled={busy !== null}>
                 {busy === 'opening' ? 'Opening…' : view.action}
               </Button>
               <Button
-                variant="outline"
+                variant="ghost"
                 onClick={() => void closeChrome()}
                 disabled={busy !== null || !view.canClose || batch.running}
                 title={batch.running ? 'Stop the run first' : undefined}
               >
-                {busy === 'closing' ? 'Closing…' : 'Close Chrome'}
+                {busy === 'closing' ? 'Closing…' : 'Close'}
               </Button>
               <StatusDot tone={view.tone} />
-              <span style={{ fontSize: 12 }}>{view.text}</span>
+              <span style={{ fontSize: 12 }}>{notice ?? view.text}</span>
             </div>
-            {notice && <Callout tone="info">{notice} Press “Open Chrome” to start it again.</Callout>}
-          </div>
+          </Section>
 
-          <div style={section}>
-            <strong>2. CSV file</strong>
+          <Section title="Data">
             <div style={row}>
               <Button variant="outline" onClick={() => void pickCsv()} disabled={batch.running}>
-                Choose CSV…
+                {csvName ? 'Change CSV…' : 'Choose CSV…'}
               </Button>
-              <label style={{ ...row, fontSize: 12 }}>
-                <Switch
-                  checked={settings.csv.skipHeader}
-                  disabled={batch.running}
-                  onCheckedChange={(v) => update(setPath(settings, 'csv.skipHeader', v))}
-                />
-                First line is a header
-              </label>
               {csvName && (
                 <span style={{ fontSize: 12 }}>
-                  {csvName} — {rows.length} row{rows.length === 1 ? '' : 's'}
+                  <strong>{csvName}</strong>
+                  <span style={{ opacity: 0.7 }}>
+                    {' '}
+                    · {rows.length} row{rows.length === 1 ? '' : 's'}
+                  </span>
                 </span>
               )}
               {parsed && rows.length > 0 && (
-                <Button variant="outline" size="sm" onClick={() => setPreview('look')}>
-                  Preview data…
+                <Button variant="ghost" size="sm" onClick={() => setPreview('look')}>
+                  Preview
                 </Button>
               )}
             </div>
             {csvErrors.length > 0 && (
-              <Callout tone="warning">
-                {csvErrors.length} line{csvErrors.length === 1 ? '' : 's'} skipped:{' '}
+              <div style={{ fontSize: 12, color: 'var(--warn, #b7791f)' }}>
+                {csvErrors.length} line{csvErrors.length === 1 ? '' : 's'} skipped —{' '}
                 {csvErrors
-                  .slice(0, 5)
+                  .slice(0, 3)
                   .map((c) => `line ${c.line}: ${c.error}`)
                   .join('; ')}
-                {csvErrors.length > 5 ? '…' : ''}
-              </Callout>
+                {csvErrors.length > 3 ? '…' : ''}
+              </div>
             )}
-          </div>
+          </Section>
 
-          <div style={section}>
-            <strong>3. Fixed values (same for every row)</strong>
-            <div style={{ fontSize: 12, opacity: 0.8 }}>
-              Saved automatically and reused next time. Type the text exactly as the dropdown shows it.
-            </div>
+          <Section title="Same for every row">
             <FixedValues
               constants={settings.form.constants}
               onChange={(c) => update(setPath(settings, 'form.constants', c))}
@@ -330,55 +318,41 @@ export function ServiceListAutomation() {
               onPresets={setSavedPresets}
               disabled={batch.running}
             />
-          </div>
+          </Section>
 
-          <div style={section}>
-            <strong>4. Run</strong>
-            <label style={{ ...row, fontSize: 12 }}>
-              <Switch checked={dryRun} disabled={batch.running} onCheckedChange={setDryRun} />
-              Dry run — fill each form but do not submit (on every time this screen opens)
-            </label>
-            {!dryRun && rows.length > 0 && (
-              <Callout tone="warning">
-                Dry run is off. Start will really create {rows.length} service code{rows.length === 1 ? '' : 's'} in the system.
-              </Callout>
-            )}
+          <Section title="Run" last>
             <div style={row}>
-              <Button onClick={onStart} disabled={!canRun} variant={dryRun ? 'default' : 'destructive'}>
-                {dryRun ? 'Start dry run…' : 'Start (real run)…'}
-              </Button>
-              <Button variant="outline" onClick={() => void stop()} disabled={!batch.running}>
-                Stop after current row
-              </Button>
-              {rows.length > 0 && (
-                <span style={{ fontSize: 12 }}>
-                  {done} / {rows.length}
-                </span>
+              <div style={batch.running ? { pointerEvents: 'none', opacity: 0.5 } : undefined}>
+                <Segmented<'dry' | 'real'>
+                  value={dryRun ? 'dry' : 'real'}
+                  onValueChange={(v) => setDryRun(v === 'dry')}
+                  options={[
+                    { value: 'dry', label: 'Dry run' },
+                    { value: 'real', label: 'Real run' },
+                  ]}
+                />
+              </div>
+              {!batch.running && (
+                <Button onClick={onStart} disabled={!canRun} variant={dryRun ? 'default' : 'destructive'}>
+                  {dryRun
+                    ? 'Preview & dry run'
+                    : `Preview & create ${rows.length || ''} service code${rows.length === 1 ? '' : 's'}`.replace('  ', ' ')}
+                </Button>
               )}
             </div>
-            {view.state !== 'ready' && rows.length > 0 && !batch.running && (
-              <div style={{ fontSize: 12, opacity: 0.8 }}>Start is available once Chrome shows “Signed in — ready”.</div>
+            <div style={{ fontSize: 11, opacity: 0.65 }}>
+              {blocker && !batch.running
+                ? blocker
+                : dryRun
+                  ? 'Dry run fills each form and closes it without submitting. It is selected every time this screen opens.'
+                  : 'Real run submits every row: records are created in the system.'}
+            </div>
+
+            {batch.abortReason && <Callout tone="error">Stopped early: {batch.abortReason}</Callout>}
+            {started && (
+              <RunResults rows={rows} batch={batch} onStop={() => void stop()} onRunAgain={onStart} canRunAgain={canRun} />
             )}
-            {batch.abortReason && <Callout tone="error">Stopped: {batch.abortReason}</Callout>}
-            {batch.summary && !batch.abortReason && (
-              <Callout tone={batch.summary.failed > 0 || batch.summary.unconfirmed > 0 ? 'warning' : 'success'}>
-                {summaryText(batch.summary, batch.dryRun)}
-              </Callout>
-            )}
-            {rows.length > 0 && (
-              <div style={{ maxHeight: 320, overflowY: 'auto', fontSize: 12 }}>
-                {rows.map((r, i) => (
-                  <div key={`${r.serviceCode}-${i}`} style={{ ...row, padding: '2px 0' }}>
-                    <span style={{ width: 28, opacity: 0.6 }}>{i + 1}</span>
-                    <span style={{ width: 140 }}>{r.serviceCode}</span>
-                    <span style={{ flex: 1 }}>{r.merchantName}</span>
-                    <span style={{ width: 150 }}>{STATUS_LABEL[batch.statuses[i] ?? 'pending']}</span>
-                    {batch.notes[i] && <span style={{ flexBasis: '100%', opacity: 0.8 }}>{batch.notes[i]}</span>}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          </Section>
         </>
       )}
 
@@ -403,5 +377,23 @@ export function ServiceListAutomation() {
         />
       )}
     </div>
+  );
+}
+
+/** A titled block of the Run screen: small heading, hairline between blocks. */
+function Section({ title, last, children }: { title: string; last?: boolean; children: React.ReactNode }) {
+  return (
+    <section
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        padding: '14px 0',
+        borderBottom: last ? undefined : '1px solid var(--line, rgba(128,128,128,0.2))',
+      }}
+    >
+      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase', opacity: 0.6 }}>{title}</div>
+      {children}
+    </section>
   );
 }

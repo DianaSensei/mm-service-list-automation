@@ -16,9 +16,17 @@ import {
   type Settings,
 } from './settings';
 
+export interface ProfileInfo {
+  profileDir: string;
+  exists: boolean;
+  chromePath: string | null;
+}
+
 interface Props {
   settings: Settings;
   onChange: (next: Settings) => void;
+  /** Where the tool's Chrome stores its profile; null while it is being looked up. */
+  profile: ProfileInfo | null;
 }
 
 const fieldBox = { display: 'flex', flexDirection: 'column', gap: 4, padding: '6px 0' } as const;
@@ -95,7 +103,7 @@ function Control({ f, settings, onChange }: { f: FieldDef; settings: Settings; o
   }
 }
 
-export function SettingsScreen({ settings, onChange }: Props) {
+export function SettingsScreen({ settings, onChange, profile }: Props) {
   // Bumped on reset so locally-edited fields (the overrides box) re-read their value.
   const [epoch, setEpoch] = useState(0);
   const set = (path: string, v: unknown) => onChange(setPath(settings, path, v));
@@ -131,6 +139,8 @@ export function SettingsScreen({ settings, onChange }: Props) {
         </Button>
       </div>
 
+      <ChromeProfile profile={profile} />
+
       {SECTIONS.map((section) => (
         <CollapsibleSection key={section.id} title={section.title} hint={section.description} defaultOpen={!section.advanced} variant="bordered">
           <div key={epoch} style={{ display: 'flex', flexDirection: 'column' }}>
@@ -162,5 +172,39 @@ export function SettingsScreen({ settings, onChange }: Props) {
         </CollapsibleSection>
       ))}
     </div>
+  );
+}
+
+/** Read-only: where the sign-in lives, and which Chrome is started. */
+function ChromeProfile({ profile }: { profile: ProfileInfo | null }) {
+  return (
+    <CollapsibleSection
+      title="Chrome profile"
+      hint="The tool’s Chrome keeps its sign-in and cookies here, separate from your everyday Chrome."
+      defaultOpen
+      variant="bordered"
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '6px 0' }}>
+        <div style={rowStyle}>
+          <span style={{ fontSize: 12, minWidth: 210 }}>Profile folder</span>
+          <Input
+            readOnly
+            style={{ flex: 1, minWidth: 260, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
+            value={profile ? profile.profileDir : 'Looking up…'}
+            onFocus={(e) => e.currentTarget.select()}
+          />
+        </div>
+        <div style={{ fontSize: 11, opacity: 0.7 }}>
+          {profile && !profile.exists ? 'Not created yet: it appears the first time Chrome is opened from the tool. ' : ''}
+          To sign out completely, close Chrome from the tool and delete this folder.
+        </div>
+        <div style={rowStyle}>
+          <span style={{ fontSize: 12, minWidth: 210 }}>Chrome used</span>
+          <span style={{ fontSize: 12, fontFamily: 'ui-monospace, monospace', wordBreak: 'break-all' }}>
+            {profile ? (profile.chromePath ?? 'not found — set “Chrome path” below') : '…'}
+          </span>
+        </div>
+      </div>
+    </CollapsibleSection>
   );
 }

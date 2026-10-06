@@ -322,7 +322,10 @@ fn notices_body(selectors: &str, duplicate_pattern: &str) -> String {
              if (el.hasAttribute('data-slp-seen')) continue; \
              const st = d.defaultView.getComputedStyle(el); \
              if (st.display === 'none' || st.visibility === 'hidden' || el.getClientRects().length === 0) continue; \
-             const text = norm(el.textContent || ''); if (!text) continue; \
+             const raw = (el.innerText !== undefined ? el.innerText : el.textContent) || ''; \
+             const text = raw.split(/\\n+/).map(norm) \
+               .filter((l) => l && !/^\\d+ errors? ha(s|ve) occurred\\.?$/i.test(l)).join(' · '); \
+             if (!text) continue; \
              if (out.some((o) => o.text.includes(text) || text.includes(o.text))) continue; \
              out.push({{ text: text.slice(0, 300), duplicate: isDup(text) }}); }} }} \
          return out;",

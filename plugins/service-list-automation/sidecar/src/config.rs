@@ -206,6 +206,10 @@ pub struct Behavior {
     pub dialog_open_wait_ms: u64,
     /// Total "create" clicks to try per row (1 = no retry).
     pub create_attempts: u32,
+    /// Bring the Chrome window to the front once, when a run starts, so it can be
+    /// watched. Never again during the run: the user may switch away freely (the
+    /// input the tool sends does not need the window to be in front).
+    pub bring_to_front_on_start: bool,
     /// In a dry run, how long the filled dialog stays visible before it is closed.
     pub dry_run_hold_ms: u64,
 }

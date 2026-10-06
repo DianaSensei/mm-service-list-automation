@@ -154,7 +154,7 @@ const scenarios = {
       // Already in the system (created by an earlier batch): the page says so inside the dialog.
       const ev2 = await run(sc, [row('A1'), row('C1')], fast);
       const dup = ev2.find((e) => e.type === 'row-duplicate');
-      check(dup?.source === 'page' && /already exists/.test(dup.message), `duplicate reported by the page (${dup?.message})`);
+      check(dup?.source === 'page' && dup.message === 'Service Code A1 already exists.', `duplicate reported with the page's message, APEX heading dropped, no glued text (${dup?.message})`);
       check(ev2.find((e) => e.type === 'row-done' && e.index === 1), 'skip mode: the run carries on after a duplicate');
 
       const ev3 = await run(sc, [row('A1'), row('D1')], { behavior: fast.behavior, outcome: { onDuplicate: 'stop' } });

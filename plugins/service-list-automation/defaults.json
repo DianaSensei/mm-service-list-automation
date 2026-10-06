@@ -58,7 +58,8 @@
     "dryRunHoldMs": 1500,
     "afterSubmitSettleMs": 800,
     "dialogOpenWaitMs": 4000,
-    "createAttempts": 3
+    "createAttempts": 3,
+    "bringToFrontOnStart": true
   },
   "outcome": {
     "successSelectors": ".t-Alert--success, #t_Alert_Success",

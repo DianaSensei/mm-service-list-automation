@@ -96,6 +96,7 @@ export const SECTIONS: SectionDef[] = [
         ],
         hint: 'How a CSV value is matched to a dropdown option’s visible text.',
       },
+      { path: 'behavior.bringToFrontOnStart', label: 'Bring Chrome to the front when a run starts', kind: 'bool', hint: 'Once, at the start. After that, switching to another window does not interrupt the run.' },
       { path: 'behavior.timeoutMs', label: 'Step timeout (ms)', kind: 'number', min: 100, hint: 'How long to wait for each element, option or dialog.' },
       { path: 'behavior.closeTimeoutMs', label: 'Dialog close timeout (ms)', kind: 'number', min: 100, hint: 'How long to wait for the dialog to close after submit.' },
       { path: 'behavior.readyTimeoutMs', label: 'Page ready timeout (ms)', kind: 'number', min: 100, hint: 'How long to wait at the start for the page to finish loading.' },

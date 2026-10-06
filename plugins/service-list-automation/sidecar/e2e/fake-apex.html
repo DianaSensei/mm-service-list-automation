@@ -11,7 +11,7 @@ ${['P7_BU_GROUP_CODE_L1_ID','P7_BU_GROUP_CODE_L2_ID','P7_BU_GROUP_CODE_L3_ID','P
 <script>
 const $=id=>document.getElementById(id);
 addEventListener('keydown',e=>{if(e.key==='Escape')parent.postMessage({esc:1},'*')});
-addEventListener('message',e=>{if(e.data&&e.data.err){const d=document.createElement('div');d.className='t-Form-error';d.textContent=e.data.err;document.body.appendChild(d);}});
+addEventListener('message',e=>{if(e.data&&e.data.err){const d=document.createElement('div');d.className='t-Form-error';const h=document.createElement('div');h.textContent='1 error has occurred';const m=document.createElement('div');m.textContent=e.data.err;d.append(h,m);document.body.appendChild(d);}});
 const fill=(id,opts)=>setTimeout(()=>{const s=$(id);s.innerHTML='<option></option>'+opts.map(o=>'<option>  '+o+'  </option>').join('')},250);
 fill('P7_BU_GROUP_CODE_L1_ID',['SME OFFLINE','OTHER']);
 $('P7_BU_GROUP_CODE_L1_ID').onchange=()=>fill('P7_BU_GROUP_CODE_L2_ID',['L2A','L2B']);

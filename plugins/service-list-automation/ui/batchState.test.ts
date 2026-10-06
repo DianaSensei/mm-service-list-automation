@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BatchEvent } from './api';
-import { initialBatchState, reduceBatch, summaryText } from './batchState';
+import { formatDuration, initialBatchState, matchesFilter, reduceBatch, summaryText } from './batchState';
 
 const run = (events: BatchEvent[]) => events.reduce(reduceBatch, initialBatchState());
 const start = (total: number, dryRun = false): BatchEvent => ({ type: 'started', runId: 'r', total, dryRun });
@@ -64,5 +64,36 @@ describe('summaryText', () => {
     expect(summaryText({ ok: 2, unconfirmed: 0, duplicates: 0, failed: 0, cancelled: true, aborted: false }, true)).toBe(
       'Stopped: 2 filled, 0 failed.',
     );
+  });
+});
+
+describe('timing', () => {
+  it('measures each row and the whole run', () => {
+    let s = reduceBatch(initialBatchState(), { type: 'started', runId: 'r', total: 2, dryRun: false }, 1000);
+    s = reduceBatch(s, { type: 'row-start', index: 0, serviceCode: 'a' }, 1100);
+    s = reduceBatch(s, { type: 'row-done', index: 0, confirmed: true }, 1450);
+    s = reduceBatch(s, { type: 'row-start', index: 1, serviceCode: 'b' }, 1500);
+    s = reduceBatch(s, { type: 'row-duplicate', index: 1, source: 'page', message: 'x' }, 1700);
+    s = reduceBatch(s, { type: 'finished', ok: 1, failed: 0, cancelled: false, aborted: false }, 1800);
+    expect(s.rowMs).toEqual({ 0: 350, 1: 200 });
+    expect([s.startedAt, s.finishedAt]).toEqual([1000, 1800]);
+  });
+
+  it('formats durations the way the API runner does', () => {
+    expect(formatDuration(850)).toBe('850 ms');
+    expect(formatDuration(12_340)).toBe('12.3 s');
+    expect(formatDuration(125_000)).toBe('2 m 5 s');
+  });
+});
+
+describe('matchesFilter', () => {
+  it('groups results into the filter tabs', () => {
+    expect(matchesFilter('unconfirmed', 'created')).toBe(true);
+    expect(matchesFilter('filled', 'created')).toBe(true);
+    expect(matchesFilter('rejected', 'failed')).toBe(true);
+    expect(matchesFilter('error', 'failed')).toBe(true);
+    expect(matchesFilter('duplicate', 'failed')).toBe(false);
+    expect(matchesFilter('pending', 'created')).toBe(false);
+    expect(matchesFilter('pending', 'all')).toBe(true);
   });
 });

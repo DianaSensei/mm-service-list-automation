@@ -35,7 +35,8 @@
       "session-status",
       "parse-csv",
       "run-batch",
-      "cancel-batch"
+      "cancel-batch",
+      "profile-info"
     ]
   }
 }

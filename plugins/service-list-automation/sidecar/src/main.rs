@@ -13,6 +13,7 @@
 //
 // Methods:
 //   launch-chrome   { port?, chromePath?, profileDir?, url? }
+//   profile-info    {}                                   → { profileDir, exists, chromePath|null }
 //   session-status  { port?, urlContains?, settings? }   → { reachable, ready, page }
 //   parse-csv       { text, skipHeader? }                → { rows, errors }
 //   run-batch       { rows, port?, urlContains?, settings? }   (stream)
@@ -401,6 +402,10 @@ async fn run_batch_inner(id: &str, params: Value, tx: &Tx) -> Result<(), String>
     let (mut cdp, _page) = connect_page(&p.session).await?;
     // Wait (bounded) for the page to finish loading before touching anything.
     form::wait_ready(&mut cdp, &settings).await?;
+    if settings.behavior.bring_to_front_on_start {
+        // Best effort, once: a window that cannot be raised is no reason not to run.
+        let _ = cdp.call("Page.bringToFront", json!({})).await;
+    }
 
     let send = |v: Value| {
         let _ = tx.send(Response::event(id.to_string(), v));
@@ -528,6 +533,17 @@ async fn run_batch_inner(id: &str, params: Value, tx: &Tx) -> Result<(), String>
     Ok(())
 }
 
+/// Where the tool's Chrome keeps its profile (sign-in, cookies) and which Chrome
+/// binary would be started — shown in Settings so the user can find or clear it.
+fn profile_info() -> Value {
+    let dir = default_profile_dir();
+    json!({
+        "profileDir": dir,
+        "exists": dir.is_dir(),
+        "chromePath": chrome::detect_chrome(),
+    })
+}
+
 fn parse_csv_request(params: Value) -> Result<Value, String> {
     let p: CsvParams = parse(params)?;
     let columns = columns_from(p.columns)?;
@@ -569,6 +585,7 @@ async fn handle(req: Request, tx: Tx) {
         "session-status" => session_status(params).await,
         "parse-csv" => parse_csv_request(params),
         "close-chrome" => close_chrome(params).await,
+        "profile-info" => Ok(profile_info()),
         "cancel-batch" => cancel_batch(params),
         "run-batch" => return run_batch(id, params, tx).await,
         other => Err(format!("unsupported method: \"{other}\"")),

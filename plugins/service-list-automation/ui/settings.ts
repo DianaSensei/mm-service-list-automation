@@ -34,6 +34,7 @@ export interface Settings {
     afterSubmitSettleMs: number;
     dialogOpenWaitMs: number;
     createAttempts: number;
+    bringToFrontOnStart: boolean;
   };
   outcome: {
     successSelectors: string;

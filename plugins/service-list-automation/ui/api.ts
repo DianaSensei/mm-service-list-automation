@@ -84,6 +84,8 @@ export function createApi(sdk: PluginSdk) {
         url: s.connection.url || undefined,
         chromePath: s.connection.chromePath || undefined,
       }),
+    profileInfo: () =>
+      sdk.service.call<{ profileDir: string; exists: boolean; chromePath: string | null }>('profile-info'),
     closeChrome: (s: Settings) =>
       sdk.service.call<{ closed: boolean; wasOpen: boolean }>('close-chrome', { port: s.connection.port }),
     sessionStatus: (s: Settings) =>
