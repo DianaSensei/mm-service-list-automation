@@ -116,8 +116,14 @@ export function SettingsScreen({ settings, onChange }: Props) {
           size="sm"
           disabled={!anyChanged}
           onClick={() => {
-            // Connection URL is a per-session choice, not a tuning parameter: keep it.
-            onChange({ ...structuredClone(DEFAULT_SETTINGS), connection: { ...DEFAULT_SETTINGS.connection, url: settings.connection.url } });
+            // What the Run screen owns — the page URL and this run's fixed values — is not
+            // a tuning parameter: keep it.
+            const fresh = structuredClone(DEFAULT_SETTINGS);
+            onChange({
+              ...fresh,
+              connection: { ...fresh.connection, url: settings.connection.url },
+              form: { ...fresh.form, constants: settings.form.constants },
+            });
             setEpoch((n) => n + 1);
           }}
         >

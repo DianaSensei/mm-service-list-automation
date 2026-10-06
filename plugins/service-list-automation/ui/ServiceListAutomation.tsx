@@ -14,6 +14,7 @@ import { cleanPresets } from './presets';
 import { SettingsScreen } from './SettingsScreen';
 import { DEFAULT_SETTINGS, setPath, withDefaults, type Settings } from './settings';
 import { PreviewDialog } from './PreviewDialog';
+import { cleanPageUrl, cleanRecent, rememberUrl } from './urls';
 
 const PLUGIN_ID = 'service-list-automation';
 const POLL_MS = 2000;
@@ -55,6 +56,8 @@ export function ServiceListAutomation() {
   const update = useCallback((next: Settings) => setSaved(next), [setSaved]);
   const [savedPresets, setSavedPresets] = usePluginState<unknown>(sdk, 'presets', []);
   const presets = useMemo(() => cleanPresets(savedPresets), [savedPresets]);
+  const [savedRecent, setSavedRecent] = usePluginState<unknown>(sdk, 'recentUrls', []);
+  const recentUrls = useMemo(() => cleanRecent(savedRecent), [savedRecent]);
 
   const [tab, setTab] = useState<Tab>('run');
   const [session, setSession] = useState<SessionStatus | null>(null);
@@ -91,7 +94,14 @@ export function ServiceListAutomation() {
     if (next.reachable) setNotice((n) => (n === 'Chrome was closed.' ? null : n));
     previous.current = next;
     setSession(next);
-  }, [api, settings]);
+    // Remember the page the user actually works on — typed here or reached in Chrome
+    // (after a login redirect, say) — so "Open Chrome" goes straight back to it next time.
+    const url = next.ready && next.page ? cleanPageUrl(next.page.url) : null;
+    if (url) {
+      if (url !== settings.connection.url) update(setPath(settings, 'connection.url', url));
+      setSavedRecent((list: unknown) => (cleanRecent(list)[0] === url ? list : rememberUrl(list, url)));
+    }
+  }, [api, settings, update, setSavedRecent]);
 
   // Poll so the screen follows Chrome whatever closes or opens it, and look again
   // the moment the window regains focus (the user may just have been in Chrome).
@@ -232,7 +242,27 @@ export function ServiceListAutomation() {
                 placeholder="https://…"
                 onChange={(e) => update(setPath(settings, 'connection.url', e.target.value))}
               />
+              <span style={{ opacity: 0.7 }}>
+                Saved automatically from the page you last worked on; “Open Chrome” goes back to it.
+              </span>
             </label>
+            {recentUrls.length > 1 && (
+              <label style={{ ...row, fontSize: 12 }}>
+                Recent pages
+                <select
+                  style={{ height: 30, padding: '0 6px', borderRadius: 6, background: 'transparent', color: 'inherit', border: '1px solid currentColor', maxWidth: 480 }}
+                  value=""
+                  onChange={(e) => e.target.value && update(setPath(settings, 'connection.url', e.target.value))}
+                >
+                  <option value="">Choose…</option>
+                  {recentUrls.map((u) => (
+                    <option key={u} value={u}>
+                      {u}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
             <div style={row}>
               <Button onClick={() => void openChrome()} disabled={busy !== null}>
                 {busy === 'opening' ? 'Opening…' : view.action}

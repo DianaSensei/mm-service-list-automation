@@ -60,13 +60,9 @@ export const SECTIONS: SectionDef[] = [
   },
   {
     id: 'values',
-    title: 'Fixed form values',
-    description: 'Selections that are the same for every row.',
+    title: 'Vertical overrides',
+    description: 'Which “New vertical” a row selects. (L1, L5, Group Code L1 and Special project are set per run, on the Run screen.)',
     fields: [
-      { path: 'form.constants.l1', label: 'L1', kind: 'text' },
-      { path: 'form.constants.l5', label: 'L5', kind: 'text' },
-      { path: 'form.constants.groupCodeL1', label: 'Group code L1', kind: 'text' },
-      { path: 'form.constants.project', label: 'Special project', kind: 'text' },
       {
         path: 'form.verticalOverrides',
         label: 'Vertical overrides',

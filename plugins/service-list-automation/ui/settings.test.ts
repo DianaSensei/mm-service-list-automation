@@ -32,8 +32,10 @@ describe('defaults.json', () => {
   });
 
   it('every setting is editable somewhere on the settings screen', () => {
-    // Edited on the Run screen instead: the URL, and the dry-run switch (never a saved preference).
-    const edited = new Set([...FIELD_PATHS, 'connection.url', 'behavior.dryRun']);
+    // Edited on the Run screen instead: the URL, the per-run fixed values, and the
+    // dry-run switch (never a saved preference).
+    const runScreen = ['connection.url', 'behavior.dryRun', ...['l1', 'l5', 'groupCodeL1', 'project'].map((k) => `form.constants.${k}`)];
+    const edited = new Set([...FIELD_PATHS, ...runScreen]);
     const missing = leaves(DEFAULT_SETTINGS).filter((p) => !edited.has(p));
     expect(missing).toEqual([]);
   });

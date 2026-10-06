@@ -35,6 +35,7 @@ const selectStyle = {
 /** The values that are the same for every row. They are saved as you type (so the
  *  next session starts from them), and can also be kept as named presets. */
 export function FixedValues({ constants, onChange, presets, onPresets, disabled }: Props) {
+  const [editing, setEditing] = useState(false);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState('');
   const current = matchingPreset(presets, constants);
@@ -48,6 +49,23 @@ export function FixedValues({ constants, onChange, presets, onPresets, disabled 
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {!editing && (
+        <div style={row}>
+          <span style={{ fontSize: 13 }}>
+            {FIELDS.map((f, i) => (
+              <span key={f.key} title={f.label}>
+                {i > 0 && <span style={{ opacity: 0.5 }}> · </span>}
+                <span style={{ opacity: 0.6, fontSize: 11 }}>{f.label}: </span>
+                {constants[f.key] || <em style={{ opacity: 0.6 }}>(empty)</em>}
+              </span>
+            ))}
+          </span>
+          <Button size="sm" variant="outline" disabled={disabled} onClick={() => setEditing(true)}>
+            Edit
+          </Button>
+        </div>
+      )}
+      {editing && (
       <div style={row}>
         {FIELDS.map((f) => (
           <label key={f.key} style={label}>
@@ -59,7 +77,11 @@ export function FixedValues({ constants, onChange, presets, onPresets, disabled 
             />
           </label>
         ))}
+        <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
+          Done
+        </Button>
       </div>
+      )}
 
       <div style={row}>
         <span style={{ fontSize: 12 }}>Saved sets</span>
