@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { BatchEvent } from './api';
-import { formatDuration, initialBatchState, matchesFilter, reduceBatch, summaryText } from './batchState';
+import { formatDuration, initialBatchState, matchesFilter, recentIndices, reduceBatch, rowMatches, summaryText } from './batchState';
 
 const run = (events: BatchEvent[]) => events.reduce(reduceBatch, initialBatchState());
 const start = (total: number, dryRun = false): BatchEvent => ({ type: 'started', runId: 'r', total, dryRun });
@@ -95,5 +95,34 @@ describe('matchesFilter', () => {
     expect(matchesFilter('duplicate', 'failed')).toBe(false);
     expect(matchesFilter('pending', 'created')).toBe(false);
     expect(matchesFilter('pending', 'all')).toBe(true);
+  });
+});
+
+describe('recentIndices', () => {
+  const st = (done: number, total: number, running = true) =>
+    Array.from({ length: total }, (_, i) => (i < done ? 'done' : i === done && running ? 'running' : 'pending')) as Parameters<typeof recentIndices>[0];
+
+  it('shows everything when there are few rows', () => {
+    expect(recentIndices(st(1, 3), 5)).toEqual([0, 1, 2]);
+  });
+  it('shows the first rows before the run starts', () => {
+    expect(recentIndices(st(0, 20, false), 5)).toEqual([0, 1, 2, 3, 4]);
+  });
+  it('follows the run: the last rows that have started, ending at the current one', () => {
+    expect(recentIndices(st(12, 20), 5)).toEqual([8, 9, 10, 11, 12]);
+    expect(recentIndices(st(2, 20), 5)).toEqual([0, 1, 2]);
+  });
+  it('ends on the last row after the run', () => {
+    expect(recentIndices(st(20, 20, false), 5)).toEqual([15, 16, 17, 18, 19]);
+  });
+});
+
+describe('rowMatches', () => {
+  it('searches code, merchant and message, ignoring case', () => {
+    expect(rowMatches('m4b0', 'm4b01xe', 'Shop', undefined)).toBe(true);
+    expect(rowMatches('tiệm', 'x', 'TIỆM NƯỚC', undefined)).toBe(true);
+    expect(rowMatches('already', 'x', 'y', 'Service code already exists.')).toBe(true);
+    expect(rowMatches('zzz', 'x', 'y', 'z')).toBe(false);
+    expect(rowMatches('  ', 'x', 'y', undefined)).toBe(true);
   });
 });

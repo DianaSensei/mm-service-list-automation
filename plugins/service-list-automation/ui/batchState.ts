@@ -143,3 +143,25 @@ export function formatDuration(ms: number): string {
   const m = Math.floor(sec / 60);
   return `${m} m ${Math.round(sec - m * 60)} s`;
 }
+
+/** Rows to show inline (the full list lives in the results popup): all of them when
+ *  there are few, otherwise the `max` most recent ones that have started — which
+ *  follows the run while it is going — or the first `max` before anything started. */
+export function recentIndices(statuses: RowStatus[], max: number): number[] {
+  const all = statuses.map((_, i) => i);
+  if (statuses.length <= max) return all;
+  let last = -1;
+  statuses.forEach((s, i) => {
+    if (s !== 'pending') last = i;
+  });
+  if (last < 0) return all.slice(0, max);
+  const end = last + 1;
+  return all.slice(Math.max(0, end - max), end);
+}
+
+/** Free-text search over what a row shows: service code, merchant, message. */
+export function rowMatches(q: string, serviceCode: string, merchant: string, note: string | undefined): boolean {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return true;
+  return [serviceCode, merchant, note ?? ''].some((v) => v.toLowerCase().includes(needle));
+}
